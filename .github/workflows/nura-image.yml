@@ -74,7 +74,13 @@ jobs:
               git clone --depth 1 -b "$PMAPORTS_REF" \
                 https://gitlab.nura.eco/nura/pmaports.git /tmp/pmaports
 
-              cp -r /work/device/leeco-x2 /tmp/pmaports/device/testing/
+              # Inject device package, firmware skeleton and the x2 kernel
+              # patches (DTS + panel) into the pmaports checkout. The kernel
+              # package then ships qcom/msm8996-leeco-x2.dtb and the panel
+              # module, so boot-deploy can assemble the extlinux flow.
+              python3 /work/scripts/pmaports-inject.py /tmp/pmaports \
+                /work/kernel/pmaports /work/device/leeco-x2 \
+                /work/device/firmware-leeco-x2
 
               # Show the exact CLI surface so failures are diagnosable
               pmbootstrap init --help 2>&1 | head -40 || true

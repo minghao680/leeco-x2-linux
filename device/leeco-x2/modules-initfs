@@ -1,4 +1,11 @@
 # Modules that must be available in the initramfs.
-# The UFS controller and its PHY are needed to find the rootfs.
+# The UFS controller and its PHY are needed to find the rootfs
+# (built-in =y in the current kernel config, listed here as a safety net).
 ufs_qcom
 phy_qcom_qmp_ufs
+
+# USB gadget: the only console path before the rootfs is mounted
+# (no UART wired on this board). The kernel ships these as modules.
+usb_f_acm
+usb_f_ncm
+usb_f_rndis
