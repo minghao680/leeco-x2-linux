@@ -1,25 +1,34 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Sharp QHD dual-DSI command mode panel for the LeEco Le Max 2 (x2).
+ * Sharp QHD dual-DSI video-mode panel for the LeEco Le Max 2 (x2).
  *
  * The panel is driven over two bonded DSI links: DSI0 carries the left half
  * (720x2560) and DSI1 the right half, giving a combined 1440x2560 @60Hz
- * video-mode display.
+ * display in pingpong-split video mode (non-burst, sync-event).
  *
- * Panel parameters were taken from the vendor kernel devicetree:
- *   arch/arm/boot/dts/qcom/leeco/dsi-panel-sharp-dualmipi-cmd.dtsi
- *     h-front-porch = 120, h-back-porch = 64, h-pulse-width = 16
- *     v-back-porch  = 4,   v-front-porch = 8,  v-pulse-width = 4
- *     panel width 720, height 2560, framerate 60
+ * All parameters come from the vendor kernel devicetree of a retail PVT
+ * unit (msm8996-v3-pmi8994-le_x2_na-pvt.dts):
+ *   arch/arm/boot/dts/qcom/leeco/dsi-panel-sharp-dualmipi-cmd-le_x2-dvt1_1.dtsi
+ *     h-front-porch = 154, h-back-porch = 100, h-pulse-width = 10
+ *     v-back-porch  = 7,   v-front-porch = 8,  v-pulse-width = 1
+ *     panel 720x2560 @60, bpp 24, 68mm x 121mm
+ *     reset sequence <1 10>, <0 10>, <1 10> (raw gpio, ends out of reset)
+ *     traffic mode non_burst_sync_event -> MIPI_DSI_MODE_VIDEO only
+ *     (no SYNC_PULSE / BURST; msm dsi host maps that to
+ *     NON_BURST_SYNCH_EVENTS), te-check-enable via SET_TEAR_ON
+ *
+ * The panel has no dedicated supply rails in the vendor DTS (the PVT dtsi
+ * even /delete-property/ the DSI controller vddio-supply), so none are
+ * requested here.
  *
  * Structure is modelled on panel-sharp-lq079l1sx01.c, which is also a
- * two-link Sharp panel, and on panel-samsung-s6e3ha2.c whose 1440x2560
- * mode matches this panel exactly.
+ * two-link Sharp panel, and on panel-novatek-nt36523.c for the dual-link
+ * command helper usage.
  *
- * NOTE: this driver is untested on hardware. The init sequence below is the
- * minimum needed to get a picture; vendor kernels use several extra
- * manufacturer commands (0xb0/0xb3/0xd6, see the dtsi above) which are
- * still missing.
+ * NOTE: untested on hardware. The on/off sequences are byte-for-byte the
+ * vendor qcom,mdss-dsi-on/off-command payloads; the vendor attribute
+ * qcom,dcs-cmd-by-left is approximated by writing to both links, as other
+ * mainline dual-DSI panels do.
  */
 
 #include <linux/backlight.h>
@@ -28,7 +37,6 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_graph.h>
-#include <linux/regulator/consumer.h>
 
 #include <drm/drm_connector.h>
 #include <drm/drm_mipi_dsi.h>
@@ -44,12 +52,6 @@ struct leeco_x2_panel {
 	struct mipi_dsi_device *dsi[2];
 
 	struct gpio_desc *reset_gpio;
-	struct regulator_bulk_data *supplies;
-};
-
-static const struct regulator_bulk_data leeco_x2_supplies[] = {
-	{ .supply = "vddio" },
-	{ .supply = "vdd" },
 };
 
 static inline struct leeco_x2_panel *to_leeco_x2_panel(struct drm_panel *panel)
@@ -59,76 +61,54 @@ static inline struct leeco_x2_panel *to_leeco_x2_panel(struct drm_panel *panel)
 
 static void leeco_x2_panel_reset(struct leeco_x2_panel *ctx)
 {
-	/* vendor reset sequence: <1 10>, <0 10>, <1 10> (ms) */
+	/*
+	 * reset-gpios is GPIO_ACTIVE_LOW: gpiod 1 = panel held in reset
+	 * (raw line low). The vendor sequence pulses the raw line low for
+	 * 10ms and ends with the panel OUT of reset, so do the same: the
+	 * panel is held in reset since probe (GPIOD_OUT_HIGH).
+	 */
 	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
 	usleep_range(10000, 11000);
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
-	usleep_range(10000, 11000);
-	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
 	usleep_range(10000, 11000);
 }
 
 static int leeco_x2_panel_prepare(struct drm_panel *panel)
 {
 	struct leeco_x2_panel *ctx = to_leeco_x2_panel(panel);
-	struct device *dev = panel->dev;
 	struct mipi_dsi_device *dsi0 = ctx->dsi[0];
 	struct mipi_dsi_device *dsi1 = ctx->dsi[1];
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = NULL };
-	int ret;
 
-	ret = regulator_bulk_enable(ARRAY_SIZE(leeco_x2_supplies), ctx->supplies);
-	if (ret) {
-		dev_err(dev, "error enabling regulators (%d)\n", ret);
-		return ret;
-	}
+	leeco_x2_panel_reset(ctx);
 
-	usleep_range(10000, 11000);
-
-	if (ctx->reset_gpio)
-		leeco_x2_panel_reset(ctx);
-
-	usleep_range(10000, 11000);
-
-	/* Soft reset, wait 10ms */
-	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, MIPI_DCS_SOFT_RESET);
-	mipi_dsi_msleep(&dsi_ctx, 10);
-
-	/* vendor on-command sequence (dsi-panel-sharp-dualmipi-cmd.dtsi):
-	 * MCAP page 0, then manufacturer interface settings, then the DCS
-	 * standard block. Each vendor packet waits 10ms. */
-	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, 0xb0, 0x00);
-	mipi_dsi_msleep(&dsi_ctx, 10);
-	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, 0xd6, 0x01);
-	mipi_dsi_msleep(&dsi_ctx, 10);
-	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, 0xb3, 0x10);
-	mipi_dsi_msleep(&dsi_ctx, 10);
-
-	/* write display brightness */
-	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1,
-					  MIPI_DCS_SET_DISPLAY_BRIGHTNESS, 0xff);
-	/* write control brightness */
-	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1,
-					  MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x0c);
-	/* Set tear on */
+	/*
+	 * Vendor qcom,mdss-dsi-on-command, byte-for-byte. The 0x15 setup
+	 * writes carry no wait times in the vendor dtsi; the only waits are
+	 * 120ms after sleep-out and 32ms after display-on.
+	 */
+	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, 0xff, 0x10);
+	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, 0xfb, 0x01);
+	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, 0xba, 0x03);
+	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, 0xe5, 0x01);
+	/* set tear on */
 	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1,
 					  MIPI_DCS_SET_TEAR_ON, 0x00);
-
+	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, 0xbb, 0x03);
 	/* MCAP page 3 */
 	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, 0xb0, 0x03);
-	mipi_dsi_msleep(&dsi_ctx, 10);
-
-	/* Set display on, wait 16ms */
-	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, MIPI_DCS_SET_DISPLAY_ON);
-	mipi_dsi_msleep(&dsi_ctx, 16);
-	/* Sleep out, wait 120ms */
-	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, MIPI_DCS_EXIT_SLEEP_MODE);
+	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, 0x3b, 0x03,
+					  0x08, 0x08, 0x64, 0x9a);
+	/* sleep out, vendor waits 120ms */
+	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1,
+					  MIPI_DCS_EXIT_SLEEP_MODE);
 	mipi_dsi_msleep(&dsi_ctx, 120);
+	/* display on, vendor waits 32ms */
+	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1,
+					  MIPI_DCS_SET_DISPLAY_ON);
+	mipi_dsi_msleep(&dsi_ctx, 32);
 
-	if (dsi_ctx.accum_err)
-		return dsi_ctx.accum_err;
-
-	return 0;
+	return dsi_ctx.accum_err;
 }
 
 static int leeco_x2_panel_unprepare(struct drm_panel *panel)
@@ -138,30 +118,40 @@ static int leeco_x2_panel_unprepare(struct drm_panel *panel)
 	struct mipi_dsi_device *dsi1 = ctx->dsi[1];
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = NULL };
 
-	/* vendor off sequence: display off (50ms), sleep in (120ms) */
+	/*
+	 * Vendor qcom,mdss-dsi-off-command: FF 10, FB 01, display off
+	 * (50ms), sleep in (120ms), 4f 01 (120ms).
+	 */
+	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, 0xff, 0x10);
+	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, 0xfb, 0x01);
 	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1,
 					  MIPI_DCS_SET_DISPLAY_OFF);
 	mipi_dsi_msleep(&dsi_ctx, 50);
 	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1,
 					  MIPI_DCS_ENTER_SLEEP_MODE);
 	mipi_dsi_msleep(&dsi_ctx, 120);
+	mipi_dsi_dual_dcs_write_seq_multi(&dsi_ctx, dsi0, dsi1, 0x4f, 0x01);
+	mipi_dsi_msleep(&dsi_ctx, 120);
 
-	if (ctx->reset_gpio)
-		gpiod_set_value_cansleep(ctx->reset_gpio, 1);
+	if (dsi_ctx.accum_err)
+		return dsi_ctx.accum_err;
 
-	return regulator_bulk_disable(ARRAY_SIZE(leeco_x2_supplies), ctx->supplies);
+	/* hold the panel in reset while powered down */
+	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
+
+	return 0;
 }
 
 /*
- * Combined 1440x2560 @ 60Hz. The porches are the vendor values; each link
- * drives half the width, so hdisplay covers both halves here.
+ * Combined 1440x2560 @ 60Hz. The porches are the vendor PVT values; each
+ * link drives half the width, so hdisplay covers both halves here.
  */
-#define LEECO_X2_HFP	120
-#define LEECO_X2_HBP	64
-#define LEECO_X2_HPW	16
+#define LEECO_X2_HFP	154
+#define LEECO_X2_HBP	100
+#define LEECO_X2_HPW	10
 #define LEECO_X2_VFP	8
-#define LEECO_X2_VBP	4
-#define LEECO_X2_VPW	4
+#define LEECO_X2_VBP	7
+#define LEECO_X2_VPW	1
 
 static const struct drm_display_mode leeco_x2_default_mode = {
 	.clock = (1440 + LEECO_X2_HFP + LEECO_X2_HBP + LEECO_X2_HPW) *
@@ -174,8 +164,8 @@ static const struct drm_display_mode leeco_x2_default_mode = {
 	.vsync_start = 2560 + LEECO_X2_VFP,
 	.vsync_end = 2560 + LEECO_X2_VFP + LEECO_X2_VPW,
 	.vtotal = 2560 + LEECO_X2_VFP + LEECO_X2_VPW + LEECO_X2_VBP,
-	.width_mm = 71,
-	.height_mm = 126,
+	.width_mm = 68,
+	.height_mm = 121,
 	.type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
 };
 
@@ -212,17 +202,7 @@ static int leeco_x2_panel_probe(struct mipi_dsi_device *dsi)
 	drm_panel_init(&ctx->panel, dev, &leeco_x2_panel_funcs,
 		       DRM_MODE_CONNECTOR_DSI);
 
-	ctx->supplies = devm_kcalloc(dev, ARRAY_SIZE(leeco_x2_supplies),
-				     sizeof(*ctx->supplies), GFP_KERNEL);
-	if (!ctx->supplies)
-		return -ENOMEM;
-	memcpy(ctx->supplies, leeco_x2_supplies, sizeof(leeco_x2_supplies));
-
-	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(leeco_x2_supplies),
-				      ctx->supplies);
-	if (ret)
-		return dev_err_probe(dev, ret, "failed to get supplies\n");
-
+	/* hold the panel in reset until prepare() (gpiod 1 = raw line low) */
 	ctx->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
 	if (IS_ERR(ctx->reset_gpio))
 		return dev_err_probe(dev, PTR_ERR(ctx->reset_gpio),
@@ -263,10 +243,13 @@ static int leeco_x2_panel_probe(struct mipi_dsi_device *dsi)
 
 		ctx->dsi[i]->lanes = 4;
 		ctx->dsi[i]->format = MIPI_DSI_FMT_RGB888;
-		/* vendor: non_burst_sync_event, video mode without EOT */
+		/*
+		 * vendor traffic mode non_burst_sync_event: plain video
+		 * mode - the msm dsi host maps VIDEO without SYNC_PULSE or
+		 * BURST to NON_BURST_SYNCH_EVENTS. LPM for LP DCS writes.
+		 */
 		ctx->dsi[i]->mode_flags = MIPI_DSI_MODE_VIDEO |
-					  MIPI_DSI_MODE_LPM |
-					  MIPI_DSI_MODE_VIDEO_SYNC_PULSE;
+					  MIPI_DSI_MODE_LPM;
 
 		ret = devm_mipi_dsi_attach(dev, ctx->dsi[i]);
 		if (ret < 0) {

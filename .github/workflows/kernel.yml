@@ -19,6 +19,10 @@ on:
         description: "optional full .config to seed with (repo path, e.g. kernel/config-pmos-msm8996.aarch64)"
         required: false
         default: ""
+      with_panel:
+        description: "also build the Le Max 2 panel driver (untested on hardware)"
+        required: false
+        default: "false"
   push:
     paths:
       - "kernel/**"
@@ -95,6 +99,20 @@ jobs:
             exit 1
           }
 
+      - name: Apply panel driver (opt-in)
+        # Push-triggered builds never see this input, so the panel is only
+        # compiled when explicitly requested via workflow_dispatch. Appending
+        # at the end of Kconfig/Makefile is valid Kbuild.
+        if: ${{ github.event.inputs.with_panel == 'true' }}
+        run: |
+          set -e
+          cp kernel/patches/panel-sharp-leeco-x2.c \
+             kernel-src/drivers/gpu/drm/panel/panel-sharp-leeco-x2.c
+          cat kernel/patches/panel-Kconfig.fragment \
+            >> kernel-src/drivers/gpu/drm/panel/Kconfig
+          echo 'obj-$(CONFIG_DRM_PANEL_SHARP_LEECO_X2) += panel-sharp-leeco-x2.o' \
+            >> kernel-src/drivers/gpu/drm/panel/Makefile
+
       - name: Configure
         run: |
           set -e
@@ -134,10 +152,13 @@ jobs:
             -e USB -e USB_DWC3 -e USB_DWC3_DUAL_ROLE -e USB_GADGET \
             -e USB_CONFIGFS -e USB_CONFIGFS_SERIAL -e USB_CONFIGFS_ACM \
             -e TYPEC -e PHY_QCOM_QMP_USB -e PHY_QCOM_QUSB2
+          if [ "${{ github.event.inputs.with_panel }}" = "true" ]; then
+            scripts/config --file .config -e DRM_PANEL_SHARP_LEECO_X2
+          fi
           make ARCH=arm64 LLVM=1 olddefconfig
 
           echo "=== key options ==="
-          grep -E "CONFIG_(ARCH_QCOM|DRM_MSM|SCSI_UFS_QCOM|PHY_QCOM_QMP_UFS|TOUCHSCREEN_ATMEL_MXT|PINCTRL_MSM8996|PSTORE_RAM|PSTORE_CONSOLE|USB_DWC3|USB_CONFIGFS|USB_CONFIGFS_ACM)=" .config || true
+          grep -E "CONFIG_(ARCH_QCOM|DRM_MSM|DRM_PANEL_SHARP_LEECO_X2|SCSI_UFS_QCOM|PHY_QCOM_QMP_UFS|TOUCHSCREEN_ATMEL_MXT|PINCTRL_MSM8996|PSTORE_RAM|PSTORE_CONSOLE|USB_DWC3|USB_CONFIGFS|USB_CONFIGFS_ACM)=" .config || true
 
       - name: Build kernel + dtbs
         run: |
