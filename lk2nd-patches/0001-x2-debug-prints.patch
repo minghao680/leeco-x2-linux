@@ -1,5 +1,5 @@
 diff --git a/app/aboot/aboot.c b/app/aboot/aboot.c
-index b44a5c2..4406a2b 100644
+index b44a5c2..917bab8 100644
 --- a/app/aboot/aboot.c
 +++ b/app/aboot/aboot.c
 @@ -158,6 +158,8 @@ struct fastboot_cmd_desc {
@@ -185,7 +185,7 @@ index b44a5c2..4406a2b 100644
  	if(dt_size != 0) {
  		/* add kernel offset */
  		dt_image_offset += page_size;
-@@ -3149,6 +3254,104 @@ int copy_dtb(uint8_t *boot_image_start, unsigned int scratch_offset)
+@@ -3149,6 +3254,149 @@ int copy_dtb(uint8_t *boot_image_start, unsigned int scratch_offset)
  }
  #endif
  
@@ -242,14 +242,24 @@ index b44a5c2..4406a2b 100644
 + * x2: hand the arm64 kernel to a secondary core through PSCI CPU_ON, then
 + * power this core off. No TZ milestone involved.
 + *
-+ * PSCI SMC32 function IDs (standard):
-+ *   CPU_ON  0xC3000003 : x1 = target MPIDR, x2 = entry, x3 = context_id
-+ *   CPU_OFF 0x84000008 : powers down the calling core, never returns
++ * PSCI semantics that matter here:
++ *   - CPU_ON ALWAYS returns on the calling core (SUCCESS = 0) while the
++ *     target core starts asynchronously at `entry` in AArch64 with
++ *     MMU/caches off and x0 = context_id (= dtb) - exactly the arm64
++ *     boot protocol. A return from the SMC is therefore NOT a failure:
++ *     the previous code treated it as one, printed "CPU_ON FAILED" and
++ *     SYSTEM_RESET the phone right after a successful CPU_ON, killing
++ *     the kernel that had just started on the sibling core.
++ *   - CPU_OFF powers down the calling core and does not return on
++ *     success, so the kernel's SMP bring-up can CPU_ON this core back.
 + *
-+ * On success CPU1 starts at `entry` in AArch64 with MMU/caches off and
-+ * r0/x0 = `dtb` (PSCI passes context_id in x0) - exactly the arm64 boot
-+ * protocol. CPU0 is off, so the kernel's SMP bring-up can PSCI CPU_ON it
-+ * back later.
++ * Standard PSCI 0.2 function IDs (SMCCC encoding, OEN = 0):
++ *   CPU_ON       SMC32 0x84000003 / SMC64 0xC4000003
++ *   CPU_OFF      SMC32 0x84000002
++ *   SYSTEM_RESET SMC32 0x84000009 - proven working on this TZ.
++ * lk2nd runs AArch32, so 0x84000003 is the correct primary choice; the
++ * other encodings are probed as fallbacks and the one accepted by the
++ * firmware is shown on screen.
 + *
 + * The sibling core is picked by toggling Aff0 of our own MPIDR: on
 + * msm8996 the four cores sit at MPIDR 0x0/0x1/0x100/0x101, so ^1 always
@@ -258,30 +268,65 @@ index b44a5c2..4406a2b 100644
 +void __attribute__((noreturn))
 +x2_psci_handoff(uint32_t entry, uint32_t dtb)
 +{
-+	uint32_t mpidr, target;
++	static const uint32_t cpu_on_ids[] = {
++		0x84000003,	/* PSCI 0.2 CPU_ON, SMC32 (correct for AArch32) */
++		0xC4000003,	/* PSCI 0.2 CPU_ON, SMC64 */
++		0xC3000003,	/* legacy guess kept as a last-resort probe */
++	};
++	uint32_t mpidr, target, ret = 0xFFFFFFFF, used_id = 0;
++	int i;
 +
 +	__asm__ volatile("mrc p15, 0, %0, c0, c0, 5" : "=r"(mpidr));
 +	target = (mpidr & 0xFFFFFF00u) | ((mpidr & 0xFFu) ^ 1u);
 +
-+	{
++	for (i = 0; i < (int)(sizeof(cpu_on_ids) / sizeof(cpu_on_ids[0])); i++) {
++		register uint32_t r0 __asm__("r0");
 +		register uint32_t r1 __asm__("r1") = target;
 +		register uint32_t r2 __asm__("r2") = entry;
 +		register uint32_t r3 __asm__("r3") = dtb;
-+		__asm__ volatile("movw r0, #0x0003\n\t movt r0, #0xC300\n\t smc #0"
-+			: : "r"(r1), "r"(r2), "r"(r3)
-+			: "r0", "memory");
++
++		__asm__ volatile("smc #0"
++			: "=r"(r0)
++			: "0"(cpu_on_ids[i]), "r"(r1), "r"(r2), "r"(r3)
++			: "memory");
++		ret = r0;
++		used_id = cpu_on_ids[i];
++		dprintf(INFO, "x2dbg: PSCI CPU_ON id=%08x ret=%d\n",
++			used_id, (int32_t)ret);
++		if (ret == 0)
++			break;
++		/* NOT_SUPPORTED (-1): probe the next convention; any other
++		 * return is a real firmware answer, stop probing. */
++		if ((int32_t)ret != -1)
++			break;
 +	}
 +
-+	/* if we get here, CPU_ON failed - report via screen, then die */
-+	{
++	if (ret != 0) {
 +		extern void x2_screen_hex(int, const char *, unsigned);
 +		extern void x2_screen_line(int, const char *);
-+		x2_screen_line(6, "CPU_ON FAILED");
-+		x2_screen_line(7, "phone resets now");
-+	}
 +
-+	/* force a reset through PSCI so the failure is visible immediately */
-+	__asm__ volatile("movw r0, #0x0009\n\	 movt r0, #0x8400\n\	 smc #0");
++		x2_screen_hex(6, "CPU_ON id", used_id);
++		x2_screen_hex(7, "CPU_ON ret", ret);
++		x2_screen_line(8, "phone resets now");
++		{
++			register uint32_t r0 __asm__("r0");
++			__asm__ volatile("smc #0"
++				: "=r"(r0) : "0"(0x84000009) : "memory");
++		}
++	} else {
++		extern void x2_screen_line(int, const char *);
++
++		x2_screen_line(6, "CPU_ON OK - kernel entering");
++		{
++			register uint32_t r0 __asm__("r0");
++			/* CPU_OFF: does not return on success. If this
++			 * firmware denies it, the kernel boots with 3
++			 * cores and CPU0 stays parked here. */
++			__asm__ volatile("smc #0"
++				: "=r"(r0) : "0"(0x84000002) : "memory");
++			dprintf(INFO, "x2dbg: CPU_OFF returned %d\n", (int32_t)r0);
++		}
++	}
 +
 +	for (;;)
 +		__asm__ volatile("wfi");
@@ -290,7 +335,7 @@ index b44a5c2..4406a2b 100644
  void cmd_boot(const char *arg, void *data, unsigned sz)
  {
  	unsigned kernel_actual;
-@@ -3441,6 +3644,31 @@ void cmd_boot(const char *arg, void *data, unsigned sz)
+@@ -3441,6 +3689,31 @@ void cmd_boot(const char *arg, void *data, unsigned sz)
  	 */
  	if (!dtb_copied) {
  		void *dtb;
@@ -322,7 +367,7 @@ index b44a5c2..4406a2b 100644
  		dtb = dev_tree_appended((void*)(ptr + page_size),
  					hdr->kernel_size, dtb_offset,
  					(void *)hdr->tags_addr);
-@@ -3460,6 +3688,15 @@ void cmd_boot(const char *arg, void *data, unsigned sz)
+@@ -3460,6 +3733,15 @@ void cmd_boot(const char *arg, void *data, unsigned sz)
  	memmove((void*) hdr->ramdisk_addr, ptr + page_size + kernel_actual, hdr->ramdisk_size);
  	memmove((void*) hdr->kernel_addr, (char*) (kernel_start_addr), kernel_size);
  
@@ -338,7 +383,7 @@ index b44a5c2..4406a2b 100644
  	fastboot_okay("");
  	fastboot_stop();
  
-@@ -3469,6 +3706,7 @@ void cmd_boot(const char *arg, void *data, unsigned sz)
+@@ -3469,6 +3751,7 @@ void cmd_boot(const char *arg, void *data, unsigned sz)
  	thread_sleep(LK2ND_FASTBOOT_DELAY);
  	#endif
  
@@ -346,7 +391,7 @@ index b44a5c2..4406a2b 100644
  	boot_linux((void*) hdr->kernel_addr, (void*) hdr->tags_addr,
  		   (const char*) hdr->cmdline, board_machtype(),
  		   (void*) hdr->ramdisk_addr, hdr->ramdisk_size,
-@@ -3491,8 +3729,7 @@ void cmd_erase_nand(const char *arg, void *data, unsigned sz)
+@@ -3491,8 +3774,7 @@ void cmd_erase_nand(const char *arg, void *data, unsigned sz)
  
  	ptable = flash_get_ptable();
  	if (ptable == NULL) {
