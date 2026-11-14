@@ -52,13 +52,14 @@ jobs:
 
               adduser -D -s /bin/sh pmos
               echo \"permit nopass pmos\" > /etc/doas.d/00-pmos.conf
+              mkdir -p /pmos-work && chown pmos:pmos /pmos-work
 
               git clone --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git /tmp/pmbootstrap
               cd /tmp/pmbootstrap
               python3 -m venv /tmp/venv
               . /tmp/venv/bin/activate
               pip install --no-cache-dir -e .
-              pmbootstrap --version
+              /tmp/venv/bin/pmbootstrap --version
 
               git clone --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmaports.git /tmp/pmaports
 
@@ -67,11 +68,11 @@ jobs:
               cp -r /work/device/downstream/linux-leeco-x2-ds \
                     /tmp/pmaports/device/testing/linux-leeco-x2-ds
 
-              printf \"\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\" | pmbootstrap --work /pmos-work --aports /tmp/pmaports init 2>&1 | tail -15
-              pmbootstrap --work /pmos-work --aports /tmp/pmaports config device leeco-x2-ds
-              pmbootstrap --work /pmos-work --aports /tmp/pmaports config ui \"\$PMB_UI\"
+              printf \"\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\" | su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports init\" 2>&1 | tail -15
+              su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports config device leeco-x2-ds\"
+              su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports config ui console\"
 
-              pmbootstrap --work /pmos-work --aports /tmp/pmaports install 2>&1 | tail -40
+              su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports install\" 2>&1 | tail -40
 
               mkdir -p /work/out-downstream
               find /pmos-work -maxdepth 5 \( -name \"boot.img\" -o -name \"*.img\" \) -exec cp {} /work/out-downstream/ \; 2>/dev/null || true
