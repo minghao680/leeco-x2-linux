@@ -1,0 +1,87 @@
+name: Build downstream pmOS image (leeco-x2-ds)
+
+# Route A: pmOS userland on the 3.18 downstream kernel (the daily-driver
+# kernel family, same as the Le Pro3 zl1 port in pmaports). Produces a
+# boot.img (kernel + QCDT + initramfs) and a rootfs image for userdata.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ui:
+        description: "UI to install"
+        required: true
+        default: "console"
+        type: choice
+        options: [console, none]
+  push:
+    paths:
+      - "device/downstream/**"
+      - ".github/workflows/downstream-image.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout port repo
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost 2>/dev/null || true
+          sudo apt-get clean
+          docker image prune -af 2>/dev/null || true
+          df -h /
+
+      - name: Build image in container
+        env:
+          PMB_UI: ${{ github.event.inputs.ui || 'console' }}
+        run: |
+          set -e
+          docker run --rm --privileged \
+            -v "$PWD:/work" \
+            -w /work \
+            -e PMB_UI \
+            alpine:3.20 \
+            /bin/sh -c '
+              set -e
+              apk add --no-cache git python3 py3-pip openssl device-mapper \
+                                 e2fsprogs doas tzdata
+
+              git clone --depth 1 https://gitlab.nura.eco/nura/pmbootstrap.git /opt/pmbootstrap
+              cd /opt/pmbootstrap
+              python3 -m venv /opt/venv
+              . /opt/venv/bin/activate
+              pip install --no-cache-dir -e .
+              pmbootstrap --version
+
+              git clone --depth 1 https://gitlab.nura.eco/nura/pmaports.git /tmp/pmaports
+
+              # Inject the downstream device + kernel packages
+              cp -r /work/device/downstream/device-leeco-x2-ds \
+                    /tmp/pmaports/device/testing/device-leeco-x2-ds
+              cp -r /work/device/downstream/linux-leeco-x2-ds \
+                    /tmp/pmaports/device/testing/linux-leeco-x2-ds
+
+              pmbootstrap --aports /tmp/pmaports init \
+                --device leeco-x2-ds --ui "$PMB_UI" 2>&1 | tail -20
+
+              pmbootstrap --aports /tmp/pmaports install 2>&1 | tail -40
+
+              mkdir -p /work/out-downstream
+              find /root/.local/var/pmbootstrap -maxdepth 3 \
+                \( -name "boot.img" -o -name "*.img" \) \
+                -exec cp {} /work/out-downstream/ \; 2>/dev/null || true
+              ls -lh /work/out-downstream/ || echo "no images produced"
+            '
+
+      - name: Upload image
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: downstream-image-x2-${{ github.run_number }}
+          path: out-downstream/
+          if-no-files-found: warn
+          retention-days: 14
