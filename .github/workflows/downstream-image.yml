@@ -48,7 +48,7 @@ jobs:
             /bin/sh -c '
               set -e
               apk add --no-cache git python3 py3-pip openssl device-mapper \
-                                 e2fsprogs doas tzdata multipath-tools
+                                 e2fsprogs doas tzdata multipath-tools losetup
 
               # pmbootstrap refuses to run as root: create a non-root user
               # with passwordless doas (this is how pmOS CI does it)
