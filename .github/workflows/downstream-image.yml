@@ -69,16 +69,20 @@ jobs:
               git config --system --add safe.directory /tmp/pmaports
               git config --system --add safe.directory /tmp/pmbootstrap
 
+              echo MARK-after-clones
               cp -r /work/device/downstream/device-leeco-x2-ds \
                     /tmp/pmaports/device/testing/device-leeco-x2-ds
               cp -r /work/device/downstream/linux-leeco-x2-ds \
                     /tmp/pmaports/device/testing/linux-leeco-x2-ds
 
-              printf \"\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\" | su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports init\" 2>&1 | tail -15
+              echo MARK-before-init
+              printf \"\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\" | su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports init\" 2>&1
+              echo MARK-after-init
               su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports config device leeco-x2-ds\"
               su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports config ui console\"
 
-              su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports install\" 2>&1 | tail -40
+              echo MARK-before-install
+              su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports install\" 2>&1
 
               cp /pmos-work/log.txt /work/out-downstream/pmbootstrap-log.txt 2>/dev/null || true
               mkdir -p /work/out-downstream
@@ -99,5 +103,6 @@ jobs:
           path: out-downstream/
           if-no-files-found: warn
           retention-days: 14
+
 
 
