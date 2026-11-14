@@ -73,9 +73,10 @@ jobs:
                 cp -r /work/device/downstream/linux-leeco-x2-ds \
                       /tmp/pmaports/device/testing/linux-leeco-x2-ds
 
-                # init is interactive: pipe empty answers (defaults) to
-                # generate the config, then switch device/ui via config
-                printf "\n\n\n\n\n\n\n\n\n\n" | pmbootstrap --work /pmos-work --aports /tmp/pmaports init 2>&1 | tail -15
+                # init is interactive: pipe empty answers (defaults) from the
+                # OUTER shell into su - the printf must stay OUTSIDE the su
+                # double-quoted string or its quotes break it
+                printf "\n\n\n\n\n\n\n\n\n\n" | su pmos -c "pmbootstrap --work /pmos-work --aports /tmp/pmaports init" 2>&1 | tail -15
                 pmbootstrap --work /pmos-work --aports /tmp/pmaports config device leeco-x2-ds
                 pmbootstrap --work /pmos-work --aports /tmp/pmaports config ui \"\$PMB_UI\"
 
