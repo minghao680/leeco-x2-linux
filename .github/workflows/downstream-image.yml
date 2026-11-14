@@ -73,8 +73,9 @@ jobs:
                 cp -r /work/device/downstream/linux-leeco-x2-ds \
                       /tmp/pmaports/device/testing/linux-leeco-x2-ds
 
-                # Non-interactive configuration (pmbootstrap 3.x init has no
-                # --device/--ui flags; the config command sets them directly)
+                # init is interactive: pipe empty answers (defaults) to
+                # generate the config, then switch device/ui via config
+                printf '\n\n\n\n\n\n\n\n\n\n' | pmbootstrap --aports /tmp/pmaports init 2>&1 | tail -15
                 pmbootstrap --aports /tmp/pmaports config device leeco-x2-ds
                 pmbootstrap --aports /tmp/pmaports config ui \"\$PMB_UI\"
 
