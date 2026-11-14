@@ -61,15 +61,11 @@ jobs:
               pip install --no-cache-dir -e .
               /tmp/venv/bin/pmbootstrap --version
 
-              git clone --depth 1 https://github.com/external-mirrors/pmaports.git /tmp/pmaports
+              git clone --depth 1 https://github.com/external-mirrors/pmaports.git /tmp/pmaports || echo \"CLONE EXIT: \$?\"
 
-              # The pmaports/pmbootstrap clones are root-owned but pmbootstrap
-              # runs as pmos: git refuses "dubious ownership" (exit 128) until
-              # they are marked safe in the pmos user's own git config
-              # (--system would need /etc/gitconfig write access, which pmos
-              # does not have - that silent failure killed the whole script)
-              git config --global --add safe.directory /tmp/pmaports
-              git config --global --add safe.directory /tmp/pmbootstrap
+              # BISECTION: git config lines disabled
+              # git config --global --add safe.directory /tmp/pmaports
+              # git config --global --add safe.directory /tmp/pmbootstrap
 
               echo MARK-after-clones
               cp -r /work/device/downstream/device-leeco-x2-ds \
