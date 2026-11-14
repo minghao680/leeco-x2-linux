@@ -26,7 +26,23 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            busybox-static cpio python3 bc bison flex device-tree-compiler gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libssl-dev libelf-dev
+            cpio python3 bc bison flex device-tree-compiler gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libssl-dev libelf-dev git
+
+      - name: Build aarch64 static busybox
+        # The runner's busybox-static is x86_64 - copying it into an aarch64
+        # initramfs makes /init die with "Exec format error" and the kernel
+        # panic right at boot ("Failed to execute /init"). Build the real
+        # thing with the cross toolchain instead.
+        run: |
+          set -eo pipefail
+          git clone --depth 1 --branch 1_36_1 https://git.busybox.net/busybox busybox-src
+          cd busybox-src
+          make CROSS_COMPILE=aarch64-linux-gnu- defconfig
+          sed -i 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
+          make CROSS_COMPILE=aarch64-linux-gnu- oldconfig
+          make CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" busybox
+          file busybox
+          test -x busybox
 
       - name: Build x2 dtb
         run: |
@@ -63,7 +79,7 @@ jobs:
           set -eo pipefail
           R=initramfs-root
           rm -rf "$R"; mkdir -p "$R"/{bin,sbin,proc,sys,dev,etc,tmp,usr/bin}
-          cp /usr/bin/busybox "$R/bin/busybox"
+          cp busybox-src/busybox "$R/bin/busybox"
           chmod +x "$R/bin/busybox"
           for a in sh mount umount mkdir ls cat echo sleep dmesg mdev ln \
                    ifconfig ip setsid head tail grep ps free; do

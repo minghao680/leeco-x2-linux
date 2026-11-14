@@ -155,10 +155,18 @@ jobs:
           if [ "${{ github.event.inputs.with_panel }}" = "true" ]; then
             scripts/config --file .config -e DRM_PANEL_SHARP_LEECO_X2
           fi
+          # simpledrm + fbcon MUST be built-in: lk2nd hands the splash
+          # framebuffer to the kernel via a simple-framebuffer node
+          # (cmdline lk2nd.pass-simplefb), and with DRM=y + SIMPLEDRM=y +
+          # FRAMEBUFFER_CONSOLE=y the kernel prints its console ON THE
+          # PHONE SCREEN - the only visibility we have (no UART on x2).
+          # DRM=y is required or SIMPLEDRM can only be =m.
+          scripts/config --file .config \
+            -e DRM -e DRM_SIMPLEDRM -e FRAMEBUFFER_CONSOLE
           make ARCH=arm64 LLVM=1 olddefconfig
 
           echo "=== key options ==="
-          grep -E "CONFIG_(ARCH_QCOM|DRM_MSM|DRM_PANEL_SHARP_LEECO_X2|SCSI_UFS_QCOM|PHY_QCOM_QMP_UFS|TOUCHSCREEN_ATMEL_MXT|PINCTRL_MSM8996|PSTORE_RAM|PSTORE_CONSOLE|USB_DWC3|USB_CONFIGFS|USB_CONFIGFS_ACM)=" .config || true
+          grep -E "CONFIG_(ARCH_QCOM|DRM_MSM|DRM_SIMPLEDRM|DRM_PANEL_SHARP_LEECO_X2|SCSI_UFS_QCOM|PHY_QCOM_QMP_UFS|TOUCHSCREEN_ATMEL_MXT|PINCTRL_MSM8996|PSTORE_RAM|PSTORE_CONSOLE|USB_DWC3|USB_CONFIGFS|USB_CONFIGFS_ACM|FRAMEBUFFER_CONSOLE)=" .config || true
 
       - name: Build kernel + dtbs
         run: |
