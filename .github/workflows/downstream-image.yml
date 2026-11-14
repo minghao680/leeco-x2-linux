@@ -73,23 +73,22 @@ jobs:
               cp -r /work/device/downstream/linux-leeco-x2-ds \
                     /tmp/pmaports/device/testing/linux-leeco-x2-ds
 
-              # DEBUG: dump the work-path validation source BEFORE running
-              # pmbootstrap (its errors go to log.txt which may not exist)
+              mkdir -p /work/out-downstream
+              # DEBUG: dump the work-path validation source into the artifact
+              # dir (survives any later failure)
               F=\$(grep -rln \"must not be inside the pmbootstrap path\" /tmp/pmbootstrap/pmb/ | head -1)
-              echo \"check source file: \$F\"
-              grep -n -B25 -A12 \"must not be inside the pmbootstrap path\" \"\$F\" || true
+              { echo \"check source file: \$F\"; grep -n -B25 -A12 \"must not be inside the pmbootstrap path\" \"\$F\"; } > /work/out-downstream/validation-source.txt 2>&1 || true
 
               echo MARK-before-init
-              printf \"\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\" | su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports init\" 2>&1
+              printf \"\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\" | su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports init\" 2>&1 || echo \"INIT FAILED: \$?\"
               echo MARK-after-init
-              su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports config device leeco-x2-ds\"
-              su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports config ui console\"
+              su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports config device leeco-x2-ds\" || echo \"cfg device failed\"
+              su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports config ui console\" || echo \"cfg ui failed\"
 
               echo MARK-before-install
-              su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports install\" 2>&1
+              su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports install\" 2>&1 || echo \"INSTALL FAILED: \$?\"
 
               cp /pmos-work/log.txt /work/out-downstream/pmbootstrap-log.txt 2>/dev/null || true
-              mkdir -p /work/out-downstream
               find /pmos-work -maxdepth 5 \( -name \"boot.img\" -o -name \"*.img\" \) -exec cp {} /work/out-downstream/ \; 2>/dev/null || true
 
               # DEBUG: dump the work-path validation source for the log
