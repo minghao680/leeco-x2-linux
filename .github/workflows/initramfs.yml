@@ -35,10 +35,13 @@ jobs:
         # thing with the cross toolchain instead.
         run: |
           set -eo pipefail
-          git clone --depth 1 --branch 1_36_1 https://git.busybox.net/busybox busybox-src
+          git clone --depth 1 --branch 1_37_0 https://git.busybox.net/busybox busybox-src
           cd busybox-src
           make CROSS_COMPILE=aarch64-linux-gnu- defconfig
           sed -i 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
+          # tc.c does not build against glibc >= 2.36 headers (CBQ removed);
+          # the applet is not needed in this initramfs
+          sed -i 's/^CONFIG_TC=y/# CONFIG_TC is not set/' .config
           make CROSS_COMPILE=aarch64-linux-gnu- oldconfig
           make CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" busybox
           file busybox
