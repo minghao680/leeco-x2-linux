@@ -63,6 +63,12 @@ jobs:
 
               git clone --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmaports.git /tmp/pmaports
 
+              # The pmaports/pmbootstrap clones are root-owned but pmbootstrap
+              # runs as pmos: git refuses "dubious ownership" (exit 128) until
+              # they are marked safe system-wide
+              git config --system --add safe.directory /tmp/pmaports
+              git config --system --add safe.directory /tmp/pmbootstrap
+
               cp -r /work/device/downstream/device-leeco-x2-ds \
                     /tmp/pmaports/device/testing/device-leeco-x2-ds
               cp -r /work/device/downstream/linux-leeco-x2-ds \
