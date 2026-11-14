@@ -26,7 +26,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cpio python3 bc bison flex device-tree-compiler gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libssl-dev libelf-dev git
+            cpio python3 bc bison flex device-tree-compiler gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libc6-dev-arm64-cross libssl-dev libelf-dev git
 
       - name: Build aarch64 static busybox
         # The runner's busybox-static is x86_64 - copying it into an aarch64
