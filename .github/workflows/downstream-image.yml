@@ -82,6 +82,12 @@ jobs:
                 pmbootstrap --work /pmos-work --aports /tmp/pmaports install 2>&1 | tail -40
               "
 
+              # DEBUG: dump pmbootstrap's work-path validation source (root,
+              # after the su block - no quoting sandwich)
+              F=$(grep -rln "must not be inside the pmbootstrap path" /tmp/pmbootstrap/pmb/ | head -1)
+              echo "=== check source: $F ==="
+              grep -n -B25 -A10 "must not be inside the pmbootstrap path" "$F" || true
+
               mkdir -p /work/out-downstream
               find /pmos-work -maxdepth 5 \
                 \( -name "boot.img" -o -name "*.img" \) \
