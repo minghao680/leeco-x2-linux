@@ -48,13 +48,12 @@ jobs:
             /bin/sh -c '
               set -e
               apk add --no-cache git python3 py3-pip openssl device-mapper \
-                                 e2fsprogs doas tzdata
+                                 e2fsprogs doas tzdata kpartx
 
               # pmbootstrap refuses to run as root: create a non-root user
               # with passwordless doas (this is how pmOS CI does it)
               adduser -D -s /bin/sh pmos
               echo "permit nopass pmos" > /etc/doas.d/00-pmos.conf
-              chown -R pmos:pmos /work
 
               # Canonical URLs: pmbootstrap validates the pmaports remote
               # against postmarketos.org - the nura.eco mirror breaks it.
