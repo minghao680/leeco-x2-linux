@@ -42,6 +42,10 @@ jobs:
           # tc.c does not build against glibc >= 2.36 headers (CBQ removed);
           # the applet is not needed in this initramfs
           sed -i 's/^CONFIG_TC=y/# CONFIG_TC is not set/' .config
+          # SHA hardware accel (SHA-NI) is x86-only but 1_37_0's caller
+          # lacks the guard - disable it for the aarch64 cross build
+          sed -i 's/^CONFIG_SHA1_HWACCEL=y/# CONFIG_SHA1_HWACCEL is not set/' .config
+          sed -i 's/^CONFIG_SHA256_HWACCEL=y/# CONFIG_SHA256_HWACCEL is not set/' .config
           make CROSS_COMPILE=aarch64-linux-gnu- oldconfig
           make CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" busybox
           file busybox
