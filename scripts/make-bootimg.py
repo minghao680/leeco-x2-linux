@@ -24,7 +24,12 @@ import sys
 
 PAGE = 4096
 KERNEL_ADDR = 0x80008000
-RAMDISK_ADDR = 0x81000000
+# The 6.19 arm64 Image decompresses to ~40 MB and is staged at
+# kernel_addr (0x80008000), so it occupies up to ~0x826A0000. The vendor
+# value 0x81000000 sits INSIDE that range - loading a ramdisk there would
+# clobber the kernel (or vice versa). Put the ramdisk after the kernel and
+# after tags_addr (0x83000000) instead.
+RAMDISK_ADDR = 0x84000000
 TAGS_ADDR = 0x80000100
 BOARD = b""
 # pmOS-style cmdline for lk2nd devices: console resolution comes from the
@@ -36,7 +41,12 @@ BOARD = b""
 # 3.18 Android kernel cannot read it. Our DTS already places ramoops at
 # 0x91500000 with the exact layout 3.18 expects, so the kernel's pstore log
 # survives a crash and can be read back from Android/TWRP directly.
-CMDLINE = b"earlycon panic=15"
+CMDLINE = b"earlycon panic=15 lk2nd.pass-simplefb"
+# lk2nd.pass-simplefb: lk2nd adds a /chosen simple-framebuffer node (and a
+# reserved-memory entry) pointing at its still-refreshed splash framebuffer
+# (1440x2560 r8g8b8 @ 0x83400000). With CONFIG_DRM_SIMPLEDRM=y +
+# CONFIG_FRAMEBUFFER_CONSOLE=y the kernel prints its console on the phone
+# screen - the only visibility on this UART-less board.
 
 
 def pad(data: bytes) -> bytes:
