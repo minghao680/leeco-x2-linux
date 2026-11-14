@@ -75,15 +75,15 @@ jobs:
 
                 # init is interactive: pipe empty answers (defaults) to
                 # generate the config, then switch device/ui via config
-                printf '\n\n\n\n\n\n\n\n\n\n' | pmbootstrap --work /home/pmos/work --aports /tmp/pmaports init 2>&1 | tail -15
-                pmbootstrap --work /home/pmos/work --aports /tmp/pmaports config device leeco-x2-ds
-                pmbootstrap --work /home/pmos/work --aports /tmp/pmaports config ui \"\$PMB_UI\"
+                printf '\n\n\n\n\n\n\n\n\n\n' | pmbootstrap --work /pmos-work --aports /tmp/pmaports init 2>&1 | tail -15
+                pmbootstrap --work /pmos-work --aports /tmp/pmaports config device leeco-x2-ds
+                pmbootstrap --work /pmos-work --aports /tmp/pmaports config ui \"\$PMB_UI\"
 
-                pmbootstrap --work /home/pmos/work --aports /tmp/pmaports install 2>&1 | tail -40
+                pmbootstrap --work /pmos-work --aports /tmp/pmaports install 2>&1 | tail -40
               "
 
               mkdir -p /work/out-downstream
-              find /home/pmos/.local/var/pmbootstrap -maxdepth 5 \
+              find /pmos-work -maxdepth 5 \
                 \( -name "boot.img" -o -name "*.img" \) \
                 -exec cp {} /work/out-downstream/ \; 2>/dev/null || true
               chown -R $(id -u):$(id -g) /work/out-downstream 2>/dev/null || true
@@ -98,5 +98,6 @@ jobs:
           path: out-downstream/
           if-no-files-found: warn
           retention-days: 14
+
 
 
