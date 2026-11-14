@@ -54,14 +54,14 @@ jobs:
               echo \"permit nopass pmos\" > /etc/doas.d/00-pmos.conf
               mkdir -p /pmos-work && chown pmos:pmos /pmos-work
 
-              git clone --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git /tmp/pmbootstrap
+              git clone --depth 1 https://github.com/external-mirrors/pmbootstrap.git /tmp/pmbootstrap
               cd /tmp/pmbootstrap
               python3 -m venv /tmp/venv
               . /tmp/venv/bin/activate
               pip install --no-cache-dir -e .
               /tmp/venv/bin/pmbootstrap --version
 
-              git clone --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmaports.git /tmp/pmaports
+              git clone --depth 1 https://github.com/external-mirrors/pmaports.git /tmp/pmaports
 
               # The pmaports/pmbootstrap clones are root-owned but pmbootstrap
               # runs as pmos: git refuses "dubious ownership" (exit 128) until
@@ -111,6 +111,7 @@ jobs:
           path: out-downstream/
           if-no-files-found: warn
           retention-days: 14
+
 
 
 
