@@ -46,7 +46,7 @@ jobs:
             -e PMB_UI \
             alpine:3.20 \
             /bin/sh -c "
-              set -e
+              set -e -o pipefail
               apk add --no-cache git python3 py3-pip openssl device-mapper \
                                  e2fsprogs doas tzdata multipath-tools losetup
 
@@ -80,6 +80,7 @@ jobs:
 
               su pmos -c \"/tmp/venv/bin/pmbootstrap --work /pmos-work --aports /tmp/pmaports install\" 2>&1 | tail -40
 
+              cp /pmos-work/log.txt /work/out-downstream/pmbootstrap-log.txt 2>/dev/null || true
               mkdir -p /work/out-downstream
               find /pmos-work -maxdepth 5 \( -name \"boot.img\" -o -name \"*.img\" \) -exec cp {} /work/out-downstream/ \; 2>/dev/null || true
 
@@ -98,3 +99,5 @@ jobs:
           path: out-downstream/
           if-no-files-found: warn
           retention-days: 14
+
+
