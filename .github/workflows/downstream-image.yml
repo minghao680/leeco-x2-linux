@@ -45,57 +45,43 @@ jobs:
             -w /work \
             -e PMB_UI \
             alpine:3.20 \
-            /bin/sh -c '
+            /bin/sh -c "
               set -e
               apk add --no-cache git python3 py3-pip openssl device-mapper \
                                  e2fsprogs doas tzdata multipath-tools losetup
 
-              # pmbootstrap refuses to run as root: create a non-root user
-              # with passwordless doas (this is how pmOS CI does it)
               adduser -D -s /bin/sh pmos
-              echo "permit nopass pmos" > /etc/doas.d/00-pmos.conf
+              echo \"permit nopass pmos\" > /etc/doas.d/00-pmos.conf
 
-              # Canonical URLs: pmbootstrap validates the pmaports remote
-              # against postmarketos.org - the nura.eco mirror breaks it.
-              su pmos -c "
-                git clone --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git /tmp/pmbootstrap
-                cd /tmp/pmbootstrap
-                python3 -m venv /tmp/venv
-                . /tmp/venv/bin/activate
-                pip install --no-cache-dir -e .
-                pmbootstrap --version
+              git clone --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git /tmp/pmbootstrap
+              cd /tmp/pmbootstrap
+              python3 -m venv /tmp/venv
+              . /tmp/venv/bin/activate
+              pip install --no-cache-dir -e .
+              pmbootstrap --version
 
-                git clone --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmaports.git /tmp/pmaports
+              git clone --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmaports.git /tmp/pmaports
 
-                # Inject the downstream device + kernel packages
-                cp -r /work/device/downstream/device-leeco-x2-ds \
-                      /tmp/pmaports/device/testing/device-leeco-x2-ds
-                cp -r /work/device/downstream/linux-leeco-x2-ds \
-                      /tmp/pmaports/device/testing/linux-leeco-x2-ds
+              cp -r /work/device/downstream/device-leeco-x2-ds \
+                    /tmp/pmaports/device/testing/device-leeco-x2-ds
+              cp -r /work/device/downstream/linux-leeco-x2-ds \
+                    /tmp/pmaports/device/testing/linux-leeco-x2-ds
 
-                # init is interactive: pipe empty answers (defaults) from the
-                # OUTER shell into su - the printf must stay OUTSIDE the su
-                # double-quoted string or its quotes break it
-                printf "\n\n\n\n\n\n\n\n\n\n" | su pmos -c "pmbootstrap --work /pmos-work --aports /tmp/pmaports init" 2>&1 | tail -15
-                pmbootstrap --work /pmos-work --aports /tmp/pmaports config device leeco-x2-ds
-                pmbootstrap --work /pmos-work --aports /tmp/pmaports config ui \"\$PMB_UI\"
+              printf \"\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\" | pmbootstrap --work /pmos-work --aports /tmp/pmaports init 2>&1 | tail -15
+              pmbootstrap --work /pmos-work --aports /tmp/pmaports config device leeco-x2-ds
+              pmbootstrap --work /pmos-work --aports /tmp/pmaports config ui \"\$PMB_UI\"
 
-                pmbootstrap --work /pmos-work --aports /tmp/pmaports install 2>&1 | tail -40
-              "
-
-              # DEBUG: dump pmbootstrap's work-path validation source (root,
-              # after the su block - no quoting sandwich)
-              F=$(grep -rln "must not be inside the pmbootstrap path" /tmp/pmbootstrap/pmb/ | head -1)
-              echo "=== check source: $F ==="
-              grep -n -B25 -A10 "must not be inside the pmbootstrap path" "$F" || true
+              pmbootstrap --work /pmos-work --aports /tmp/pmaports install 2>&1 | tail -40
 
               mkdir -p /work/out-downstream
-              find /pmos-work -maxdepth 5 \
-                \( -name "boot.img" -o -name "*.img" \) \
-                -exec cp {} /work/out-downstream/ \; 2>/dev/null || true
-              chown -R $(id -u):$(id -g) /work/out-downstream 2>/dev/null || true
-              ls -lh /work/out-downstream/ || echo "no images produced"
-            '
+              find /pmos-work -maxdepth 5 \( -name \"boot.img\" -o -name \"*.img\" \) -exec cp {} /work/out-downstream/ \; 2>/dev/null || true
+
+              # DEBUG: dump the work-path validation source for the log
+              F=\$(grep -rln \"must not be inside the pmbootstrap path\" /tmp/pmbootstrap/pmb/ | head -1)
+              echo \"check source file: \$F\"
+              grep -n -B25 -A10 \"must not be inside the pmbootstrap path\" \"\$F\" || true
+              ls -lh /work/out-downstream/ || echo \"no images produced\"
+            "
 
       - name: Upload image
         if: always()
@@ -105,6 +91,3 @@ jobs:
           path: out-downstream/
           if-no-files-found: warn
           retention-days: 14
-
-
-
