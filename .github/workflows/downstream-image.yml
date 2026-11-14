@@ -75,11 +75,11 @@ jobs:
 
                 # init is interactive: pipe empty answers (defaults) to
                 # generate the config, then switch device/ui via config
-                printf '\n\n\n\n\n\n\n\n\n\n' | pmbootstrap --aports /tmp/pmaports init 2>&1 | tail -15
-                pmbootstrap --aports /tmp/pmaports config device leeco-x2-ds
-                pmbootstrap --aports /tmp/pmaports config ui \"\$PMB_UI\"
+                printf '\n\n\n\n\n\n\n\n\n\n' | pmbootstrap --work /home/pmos/work --aports /tmp/pmaports init 2>&1 | tail -15
+                pmbootstrap --work /home/pmos/work --aports /tmp/pmaports config device leeco-x2-ds
+                pmbootstrap --work /home/pmos/work --aports /tmp/pmaports config ui \"\$PMB_UI\"
 
-                pmbootstrap --aports /tmp/pmaports install 2>&1 | tail -40
+                pmbootstrap --work /home/pmos/work --aports /tmp/pmaports install 2>&1 | tail -40
               "
 
               mkdir -p /work/out-downstream
@@ -98,3 +98,5 @@ jobs:
           path: out-downstream/
           if-no-files-found: warn
           retention-days: 14
+
+
