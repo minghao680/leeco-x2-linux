@@ -65,9 +65,11 @@ jobs:
 
               # The pmaports/pmbootstrap clones are root-owned but pmbootstrap
               # runs as pmos: git refuses "dubious ownership" (exit 128) until
-              # they are marked safe system-wide
-              git config --system --add safe.directory /tmp/pmaports
-              git config --system --add safe.directory /tmp/pmbootstrap
+              # they are marked safe in the pmos user's own git config
+              # (--system would need /etc/gitconfig write access, which pmos
+              # does not have - that silent failure killed the whole script)
+              git config --global --add safe.directory /tmp/pmaports
+              git config --global --add safe.directory /tmp/pmbootstrap
 
               echo MARK-after-clones
               cp -r /work/device/downstream/device-leeco-x2-ds \
