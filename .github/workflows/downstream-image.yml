@@ -50,14 +50,16 @@ jobs:
               apk add --no-cache git python3 py3-pip openssl device-mapper \
                                  e2fsprogs doas tzdata
 
-              git clone --depth 1 https://gitlab.nura.eco/nura/pmbootstrap.git /opt/pmbootstrap
+              # Canonical URLs: pmbootstrap validates the pmaports remote
+              # against postmarketos.org - the nura.eco mirror breaks it.
+              git clone --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git /opt/pmbootstrap
               cd /opt/pmbootstrap
               python3 -m venv /opt/venv
               . /opt/venv/bin/activate
               pip install --no-cache-dir -e .
               pmbootstrap --version
 
-              git clone --depth 1 https://gitlab.nura.eco/nura/pmaports.git /tmp/pmaports
+              git clone --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmaports.git /tmp/pmaports
 
               # Inject the downstream device + kernel packages
               cp -r /work/device/downstream/device-leeco-x2-ds \
@@ -65,13 +67,15 @@ jobs:
               cp -r /work/device/downstream/linux-leeco-x2-ds \
                     /tmp/pmaports/device/testing/linux-leeco-x2-ds
 
-              pmbootstrap --aports /tmp/pmaports init \
-                --device leeco-x2-ds --ui "$PMB_UI" 2>&1 | tail -20
+              # Non-interactive configuration (pmbootstrap 3.x init has no
+              # --device/--ui flags; the config command sets them directly)
+              pmbootstrap --aports /tmp/pmaports config device leeco-x2-ds
+              pmbootstrap --aports /tmp/pmaports config ui "$PMB_UI"
 
               pmbootstrap --aports /tmp/pmaports install 2>&1 | tail -40
 
               mkdir -p /work/out-downstream
-              find /root/.local/var/pmbootstrap -maxdepth 3 \
+              find /root/.local/var/pmbootstrap -maxdepth 5 \
                 \( -name "boot.img" -o -name "*.img" \) \
                 -exec cp {} /work/out-downstream/ \; 2>/dev/null || true
               ls -lh /work/out-downstream/ || echo "no images produced"
