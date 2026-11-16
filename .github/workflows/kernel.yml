@@ -23,6 +23,10 @@ on:
         description: "also build the Le Max 2 panel driver (untested on hardware)"
         required: false
         default: "false"
+      build_modules:
+        description: "also build kernel modules (false = Image.gz + dtbs only, for first boot)"
+        required: false
+        default: "true"
   push:
     paths:
       - "kernel/**"
@@ -174,7 +178,11 @@ jobs:
           cd kernel-src
           # Keep the full log: the interesting error is usually far from the tail.
           set +e
-          make ARCH=arm64 LLVM=1 -j"$(nproc)" Image.gz modules dtbs > ../build.log 2>&1
+          targets="Image.gz dtbs"
+          if [ "${{ github.event.inputs.build_modules }}" != "false" ]; then
+            targets="$targets modules"
+          fi
+          make ARCH=arm64 LLVM=1 -j"$(nproc)" $targets > ../build.log 2>&1
           rc=$?
           set -e
           echo "make exited with $rc"
