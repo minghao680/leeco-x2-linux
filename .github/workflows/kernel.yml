@@ -107,6 +107,14 @@ jobs:
             exit 1
           }
 
+      - name: Fix upstream panel driver include
+        # config-pmos enables panel-sony-synaptics-jdi as a module, but its
+        # 6.19 source uses of_device_get_match_data() without including
+        # <linux/of_device.h>; clang treats that as an implicit declaration.
+        run: |
+          sed -i 's|#include <linux/of_platform.h>|#include <linux/of_platform.h>\n#include <linux/of_device.h>|' \
+            kernel-src/drivers/gpu/drm/panel/panel-sony-synaptics-jdi.c
+
       - name: Apply panel driver (opt-in)
         # Push-triggered builds never see this input, so the panel is only
         # compiled when explicitly requested via workflow_dispatch. Appending
