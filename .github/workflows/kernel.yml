@@ -27,6 +27,10 @@ on:
         description: "also build kernel modules (false = Image.gz + dtbs only, for first boot)"
         required: false
         default: "true"
+      dtbs_only:
+        description: "build only the DTB (reuse an existing Image.gz)"
+        required: false
+        default: "false"
   push:
     paths:
       - "kernel/**"
@@ -179,6 +183,9 @@ jobs:
           # Keep the full log: the interesting error is usually far from the tail.
           set +e
           targets="Image.gz dtbs"
+          if [ "${{ github.event.inputs.dtbs_only }}" = "true" ]; then
+            targets="dtbs"
+          fi
           if [ "${{ github.event.inputs.build_modules }}" != "false" ]; then
             targets="$targets modules"
           fi
@@ -206,7 +213,9 @@ jobs:
         run: |
           set -e
           mkdir -p out
-          cp kernel-src/arch/arm64/boot/Image.gz out/
+          if [ -f kernel-src/arch/arm64/boot/Image.gz ]; then
+            cp kernel-src/arch/arm64/boot/Image.gz out/
+          fi
           cp kernel-src/arch/arm64/boot/dts/qcom/msm8996-leeco-x2.dtb out/ 2>/dev/null || {
             echo "::error::dtb not built"
             ls kernel-src/arch/arm64/boot/dts/qcom/*.dtb | head
@@ -222,7 +231,11 @@ jobs:
             echo "built_at=$(date -u +%FT%TZ)"
           } > out/BUILD-INFO
 
-          (cd out && sha256sum Image.gz msm8996-leeco-x2.dtb > SHA256SUMS)
+          (cd out && if [ -f Image.gz ]; then
+              sha256sum Image.gz msm8996-leeco-x2.dtb > SHA256SUMS
+            else
+              sha256sum msm8996-leeco-x2.dtb > SHA256SUMS
+            fi)
           ls -lh out/
 
       - name: Upload artifacts

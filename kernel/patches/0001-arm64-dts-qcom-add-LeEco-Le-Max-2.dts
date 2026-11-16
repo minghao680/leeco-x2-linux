@@ -641,3 +641,16 @@
 		power-source = <PM8994_GPIO_VPH>;
 	};
 };
+
+/*
+ * Bring-up workaround: the media SMMUs are not usable yet on this board.
+ * arm-smmu prints the d00000 (mdp_smmu) capabilities and then hangs while
+ * resetting it, before UFS/USB ever probe. Keep GPU SMMU (b40000) enabled
+ * because it probes cleanly, but disable the display/camera/venus/ADSP SMMUs
+ * until their power domains and clocks are brought up properly.
+ */
+&mdp_smmu	{ status = "disabled"; };
+&vfe_smmu	{ status = "disabled"; };
+&venus_smmu	{ status = "disabled"; };
+&lpass_q6_smmu	{ status = "disabled"; };
+
