@@ -265,6 +265,12 @@
 
 		reset-gpios = <&tlmm 24 GPIO_ACTIVE_LOW>;
 
+		/*
+		 * WLED is the only backlight source on x2; the driver calls
+		 * drm_panel_of_backlight() and follows this phandle.
+		 */
+		backlight = <&pmi8994_wled>;
+
 		ports {
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -653,4 +659,28 @@
 &vfe_smmu	{ status = "disabled"; };
 &venus_smmu	{ status = "disabled"; };
 &lpass_q6_smmu	{ status = "disabled"; };
+
+/*
+ * PMIC: charger, fuel gauge and WLED backlight.
+ *
+ * All three blocks exist in the shared PMI8994 dtsi but ship disabled, which
+ * is why a Debian boot has no battery percentage and Linux could not touch
+ * the backlight. pmi8996.dtsi re-labels the two charger/fuel-gauge nodes with
+ * the PMI8996 compatibles, so reference those labels here.
+ *
+ *   qcom-smbchg     CONFIG_CHARGER_QCOM_SMBCHG (already =y)
+ *   qcom_fg         CONFIG_BATTERY_QCOM_FG     (was =m, made =y)
+ *   qcom-wled       CONFIG_BACKLIGHT_QCOM_WLED (already =y)
+ */
+&pmi8996_smbchg {
+	status = "okay";
+};
+
+&pmi8996_fg {
+	status = "okay";
+};
+
+&pmi8994_wled {
+	status = "okay";
+};
 

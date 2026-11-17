@@ -115,11 +115,12 @@ jobs:
           sed -i 's|#include <linux/of_platform.h>|#include <linux/of_platform.h>\n#include <linux/of_device.h>|' \
             kernel-src/drivers/gpu/drm/panel/panel-sony-synaptics-jdi.c
 
-      - name: Apply panel driver (opt-in)
-        # Push-triggered builds never see this input, so the panel is only
-        # compiled when explicitly requested via workflow_dispatch. Appending
-        # at the end of Kconfig/Makefile is valid Kbuild.
-        if: ${{ github.event.inputs.with_panel == 'true' }}
+      - name: Apply panel driver
+        # Always applied now: the panel is part of the board support, and a
+        # push-triggered build never sees workflow_dispatch inputs, so gating
+        # it on an input meant push builds silently shipped a kernel without
+        # the panel driver. Appending at the end of Kconfig/Makefile is valid
+        # Kbuild and keeps the upstream files untouched.
         run: |
           set -e
           cp kernel/patches/panel-sharp-leeco-x2.c \
@@ -168,7 +169,8 @@ jobs:
             -e USB -e USB_DWC3 -e USB_DWC3_DUAL_ROLE -e USB_GADGET \
             -e USB_CONFIGFS -e USB_CONFIGFS_SERIAL -e USB_CONFIGFS_ACM \
             -e TYPEC -e PHY_QCOM_QMP_USB -e PHY_QCOM_QUSB2
-          if [ "${{ github.event.inputs.with_panel }}" = "true" ]; then
+          if [ "${{ github.event.inputs.with_panel }}" = "true" ] || \
+             grep -q DRM_PANEL_SHARP_LEECO_X2 .config; then
             scripts/config --file .config -e DRM_PANEL_SHARP_LEECO_X2
           fi
           # simpledrm + fbcon MUST be built-in: lk2nd hands the splash
