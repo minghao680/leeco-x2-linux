@@ -1,0 +1,227 @@
+diff --git a/drivers/gpu/drm/msm/msm_drv.h b/drivers/gpu/drm/msm/msm_drv.h
+index 6d847d5..f121a5f 100644
+--- a/drivers/gpu/drm/msm/msm_drv.h
++++ b/drivers/gpu/drm/msm/msm_drv.h
+@@ -265,6 +265,8 @@ struct drm_framebuffer *msm_framebuffer_create(struct drm_device *dev,
+ struct drm_framebuffer * msm_alloc_stolen_fb(struct drm_device *dev,
+ 		int w, int h, int p, uint32_t format);
+ 
++void msm_dual_display_schedule(struct drm_device *dev);
++
+ #ifdef CONFIG_DRM_MSM_KMS_FBDEV
+ int msm_fbdev_driver_fbdev_probe(struct drm_fb_helper *helper,
+ 				 struct drm_fb_helper_surface_size *sizes);
+diff --git a/drivers/gpu/drm/msm/msm_fbdev.c b/drivers/gpu/drm/msm/msm_fbdev.c
+index fd19995..ee081a9 100644
+--- a/drivers/gpu/drm/msm/msm_fbdev.c
++++ b/drivers/gpu/drm/msm/msm_fbdev.c
+@@ -17,6 +17,12 @@
+ #include "msm_gem.h"
+ #include "msm_kms.h"
+ 
++#include <drm/drm_atomic.h>
++#include <drm/drm_atomic_uapi.h>
++#include <drm/drm_crtc.h>
++#include <drm/drm_encoder.h>
++#include <drm/drm_plane.h>
++
+ static bool fbdev = true;
+ MODULE_PARM_DESC(fbdev, "Enable fbdev compat layer");
+ module_param(fbdev, bool, 0600);
+@@ -153,3 +159,186 @@ fail:
+ 	drm_framebuffer_remove(fb);
+ 	return ret;
+ }
++
++/*
++ * Dual-DSI source split for the LeEco Le Max 2.
++ *
++ * The panel is one 1440x2560 display driven by two 720-wide DSI links. Mainline
++ * MDP5 can only feed a single interface from one CTL (mdp5_ctl_pair() is unused
++ * dead code), so instead the right link gets its own CRTC which scans out the
++ * right half of the console framebuffer through the primary plane's src_x
++ * offset. fbcon keeps drawing into that buffer, both CRTCs scan it, and the two
++ * halves together form the complete image.
++ *
++ * fbdev creates a blank second framebuffer for the DSI-2 connector and can
++ * restart the CRTC later, so this is applied repeatedly for a while and only
++ * ever replaces the plane contents once the CRTC is already up - touching the
++ * connector state would clear best_encoder and kill the right link.
++ */
++static struct delayed_work msm_dual_work;
++static struct drm_device *msm_dual_dev;
++static int msm_dual_attempt;
++
++static struct drm_connector *msm_dual_find_conn(struct drm_device *dev, const char *suffix)
++{
++	struct drm_connector *conn;
++
++	list_for_each_entry(conn, &dev->mode_config.connector_list, head) {
++		if (conn->status == connector_status_connected &&
++		    strstr(conn->name, suffix))
++			return conn;
++	}
++	return NULL;
++}
++
++static struct drm_encoder *msm_dual_find_encoder(struct drm_device *dev,
++						 struct drm_connector *conn)
++{
++	struct drm_encoder *enc, *found = NULL;
++
++	drm_for_each_encoder(enc, dev) {
++		if (enc->crtc)
++			continue;
++		if (!(conn->possible_encoders & drm_encoder_mask(enc)))
++			continue;
++		found = enc;
++		break;
++	}
++	return found;
++}
++
++static int msm_dual_apply(struct drm_device *dev)
++{
++	struct drm_connector *left, *right;
++	struct drm_crtc *crtc, *scan_crtc = NULL;
++	struct drm_display_mode *mode = NULL;
++	struct drm_framebuffer *fb = NULL;
++	struct drm_atomic_state *state = NULL;
++	struct drm_connector_state *conn_state;
++	struct drm_crtc_state *crtc_state;
++	struct drm_plane_state *plane_state;
++	struct drm_encoder *enc;
++	struct drm_modeset_acquire_ctx ctx;
++	bool need_setup;
++	unsigned int xoff;
++	int ret = -EAGAIN;
++
++	mutex_lock(&dev->mode_config.mutex);
++	right = msm_dual_find_conn(dev, "-2");
++	left = msm_dual_find_conn(dev, "-1");
++	if (!right || list_empty(&right->modes))
++		goto out_unlock;
++
++	mode = list_first_entry(&right->modes, struct drm_display_mode, head);
++
++	crtc = right->state ? right->state->crtc : NULL;
++	if (!crtc) {
++		struct drm_crtc *c;
++		drm_for_each_crtc(c, dev) {
++			if (!c->state->enable) {
++				crtc = c;
++				break;
++			}
++		}
++	}
++	if (!crtc || !crtc->primary)
++		goto out_unlock;
++
++	/* The buffer fbcon draws into: the primary plane of the left CRTC. */
++	if (left && left->state && left->state->crtc)
++		scan_crtc = left->state->crtc;
++	if (scan_crtc && scan_crtc->primary)
++		fb = scan_crtc->primary->state ? scan_crtc->primary->state->fb : NULL;
++	if (!fb && dev->fb_helper)
++		fb = dev->fb_helper->fb;
++	if (!fb || fb->width < 2 * mode->hdisplay)
++		goto out_unlock;
++
++	need_setup = !crtc->state->enable ||
++		     !right->state || right->state->crtc != crtc;
++	enc = need_setup ? msm_dual_find_encoder(dev, right) : NULL;
++	if (need_setup && !enc)
++		goto out_unlock;
++
++	xoff = mode->hdisplay;
++	mutex_unlock(&dev->mode_config.mutex);
++
++	state = drm_atomic_state_alloc(dev);
++	if (!state)
++		return -ENOMEM;
++
++	drm_modeset_acquire_init(&ctx, 0);
++	state->acquire_ctx = &ctx;
++
++	crtc_state = drm_atomic_get_crtc_state(state, crtc);
++	plane_state = drm_atomic_get_plane_state(state, crtc->primary);
++	if (IS_ERR(crtc_state) || IS_ERR(plane_state)) {
++		ret = -ENOMEM;
++		goto out_state;
++	}
++
++	if (need_setup) {
++		ret = drm_atomic_set_mode_for_crtc(crtc_state, mode);
++		if (ret)
++			goto out_state;
++		crtc_state->active = true;
++		conn_state = drm_atomic_get_connector_state(state, right);
++		if (IS_ERR(conn_state)) {
++			ret = -ENOMEM;
++			goto out_state;
++		}
++		conn_state->best_encoder = enc;
++		drm_atomic_set_crtc_for_connector(conn_state, crtc);
++	}
++
++	drm_atomic_set_fb_for_plane(plane_state, fb);
++	drm_atomic_set_crtc_for_plane(plane_state, crtc);
++	plane_state->src_x = xoff << 16;
++	plane_state->src_y = 0;
++	plane_state->src_w = mode->hdisplay << 16;
++	plane_state->src_h = mode->vdisplay << 16;
++	plane_state->crtc_x = 0;
++	plane_state->crtc_y = 0;
++	plane_state->crtc_w = mode->hdisplay;
++	plane_state->crtc_h = mode->vdisplay;
++
++	ret = drm_atomic_commit(state);
++	if (ret) {
++		pr_err("msm: dual display: commit failed: %d\n", ret);
++		drm_atomic_state_put(state);
++	}
++	drm_modeset_acquire_fini(&ctx);
++	return ret;
++
++out_state:
++	drm_atomic_state_put(state);
++	drm_modeset_acquire_fini(&ctx);
++	return ret;
++
++out_unlock:
++	mutex_unlock(&dev->mode_config.mutex);
++	return ret;
++}
++
++static void msm_dual_display_commit(struct work_struct *work)
++{
++	struct drm_device *dev = msm_dual_dev;
++	int ret;
++
++	if (!dev || !dev->fb_helper)
++		return;
++
++	ret = msm_dual_apply(dev);
++	pr_info("msm: dual display: attempt %d: %d\n", ++msm_dual_attempt, ret);
++
++	if (msm_dual_attempt < 6)
++		schedule_delayed_work(&msm_dual_work, msecs_to_jiffies(8000));
++}
++
++void msm_dual_display_schedule(struct drm_device *dev)
++{
++	msm_dual_dev = dev;
++	msm_dual_attempt = 0;
++	INIT_DELAYED_WORK(&msm_dual_work, msm_dual_display_commit);
++	schedule_delayed_work(&msm_dual_work, msecs_to_jiffies(8000));
++}
+diff --git a/drivers/gpu/drm/msm/msm_kms.c b/drivers/gpu/drm/msm/msm_kms.c
+index 6e5e94f..d86060b 100644
+--- a/drivers/gpu/drm/msm/msm_kms.c
++++ b/drivers/gpu/drm/msm/msm_kms.c
+@@ -385,4 +385,5 @@ void msm_drm_kms_post_init(struct device *dev)
+ 
+ 	drm_kms_helper_poll_init(ddev);
+ 	drm_client_setup(ddev, NULL);
++	msm_dual_display_schedule(ddev);
+ }

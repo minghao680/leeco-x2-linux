@@ -9,33 +9,51 @@
 |---|---|
 | 内核 | `6.19.5-msm8996+`，VA39，4 核 / 5.7 GB |
 | 用户空间 | Debian 13.7，`apt`/`bash` 可用，187 包 |
-| 远程 | SSH over NCM 已验证，sshd 已烤进 `boot-va39-debian-sshd.img`（待首启验证） |
-| 根 | **tmpfs，断电即失** |
-| 屏幕 | mdss/DSI 就绪，只缺 panel 驱动；背光由 LK 点亮 |
-| 电量 | 无电量计，看不到百分比 |
+| 远程 | SSH over NCM 已验证；USB ACM 串口（COM12）可用 |
+| 根 | **userdata 目录根** `/data/debian/root`（53G ext4，`rw,noload`，掉电可持久） |
+| 屏幕 | **1440×2560 全屏 console 已点亮**（`screen23`，MDP5 双接口正统方案） |
+| 电量 | `qcom-battery` 可读 `capacity`（当前 16%） |
 | WiFi / BT | PCIe 关着；BT 节点在，缺固件 |
 | GPU | disabled，无硬件合成 |
-| 交互 | 触摸对（`atmel_mxt_ts`），无显示 |
+| 交互 | 触摸对（`atmel_mxt_ts`），按键未映射 |
 
 ## 阶段 A：持久化根（P0，先做）
 
 **为什么先做**：现在每次改点用户空间的东西都要重来一遍，所有后续工作的效率都被
 这一步卡着。
 
-1. 在 Debian 里挂 `/dev/sda9`（Android 的 `/data`，ext4、未加密、48 G 空闲），
-   先只读验证能读，再读写。
-2. 建 `/data/debian/debian.img`，稀疏 ext4，建议 8 GiB（够装 systemd + 编译工具链
-   + 桌面基础包）。
-3. 改 initramfs：启动时挂 sda9 → `losetup` 挂镜像 → 首次则 `mkfs.ext4` + 解包一次，
-   之后直接复用 → chroot 到 loop 根。
-4. 保留 RAM 模式作兜底：cmdline 加 `x2.root=ram|disk`，出问题能回到现在这套。
-5. 验收：连续重启两次，`/data/debian/debian.img` 里的改动都在；Android 数据无损。
+**决策（2026-11-17）**：配额 32 GiB；但因 mkfs 被安全策略硬拦截，最终**不用镜像文件**，
+改成 **userdata 上的目录式根** `/data/debian/root`（ext4 直接承载，无 loop、无格式化）。
 
-**风险**：Debian 独占挂载 Android 的 `/data` 时，Android 不能同时在跑（本来就是）。
-主线上没有 SELinux，写进去的文件没有 label，Android 侧只是看不到一个不认识的目录，
-不影响它启动。
+**状态：已完成并验收（2026-11-17）**。启动日志 `[init] /dev/sda9 mounted rw,noload on /data` →
+`[init] disk root OK: 13.7` → `root source: userdata (/data/debian/root)`；`df /` 显示 53G/48G 可用；
+硬断电后 `/root/x2-marker` 内容原样保留。
 
-**红线**：不碰分区表、不格式化任何分区、不写 boot。只在 `/data` 里新增一个文件。
+**实际走通的流程**：
+
+1. **解包在 Android 侧做**：把 initramfs 里的静态 `busybox`（`out/busybox-x2`，2,237,080 B，
+   v1.37.0）push 到 `/data/local/tmp/busybox-x2`，然后在 Android root shell 里：
+   `busybox xz -dc <tar.xz> | busybox tar -xf - -C /data/debian/root`
+   归档 sha256 与官方 `.sha256` 一致；解包后 452.8 MB，`usr/bin/bash` 1,412,096 B，
+   `etc/debian_version` = 13.7。
+2. `mount -o rw,noload /dev/sda9 /data`。**`noload` 是硬要求**：主线内核对这块 UFS 做
+   journal replay 会进入不可中断的 D 状态（带不带 `nobarrier` 都一样，实测三次），
+   串口 shell 直接卡死，只能长按电源。裸读（`dd`）正常。
+3. initramfs（`initramfs/init-debian-disk`）：等 UFS 枚举 → 试 `rw,noload`，成功且
+   `usr/bin/bash` 存在则用磁盘根；失败试 `ro,noload` 并提示；再失败回退
+   `/rootfs.tar.xz` 的 RAM 根；都失败进 rescue shell。sshd 主机密钥因根持久化只生成一次。
+4. **每次进 Debian 前的 journal 清理**（关键）：Android 的“关机”并不会 unmount `/data`
+   （实测 superblock `s_feature_incompat` 仍是 `0x246`，RECOVER 位挂着），所以 Android
+   之后不能直接进主线。流程是：关机 → 音量上+电源进 TWRP → `umount /data /sdcard` →
+   `/sbin/e2fsck -fn /dev/block/bootdevice/by-name/userdata`（TWRP 的 e2fsck 1.43.3，
+   journal 由 recovery 内核 replay）→ 确认 `0x242`（RECOVER 已清）→ Rebooting →
+   Bootloader。脚本 `scripts/x2-clean-userdata.ps1` 把这几步自动化了。
+5. 验收：`screen26` 启动即磁盘根；重启一次后 marker/rootfs 均在；Android 数据无损
+   （`e2fsck -fn` 报 37,152 files / 1,601,831 blocks，无错误）。
+
+**风险 / 注意**：`noload` 跳过 journal，主线写盘不经过 journal。若在 Debian 里硬断电，
+metadata 可能不一致，下次要在 TWRP 里跑一次 `e2fsck -fp`（不只是 `-fn`）。主线上没有
+SELinux，写进去的文件没有 label，Android 只是看到一个不认识的目录。
 
 ## 阶段 B：一次内核构建，解决屏幕与电量（P1）
 
@@ -85,6 +103,39 @@
 2. 有了 GPU 才谈得上"接近安卓的流畅度"；之前所有界面合成都是软件光栅。
 3. 再往后是 venus 视频解码、camss 相机、modem 通话——工程量最大，最后碰。
 
+## 阶段 G：传感器（P2，2026-11-17 追加）
+
+**已查明的关键事实（2026-11-17，Android 实测）**：完整清单与 45 个 sensor 的逐条
+记录见 `docs/x2-sensors.md`，整机其它硬件（面板、UFS、相机、音频、无线、指纹等）
+见 `docs/x2-hardware.md`，这里只列传感器结论。
+
+| 功能 | 型号 | 厂商 | 总线（来自 vendor `sensor_def_qcomdev.conf`） |
+|---|---|---|---|
+| 加速度计 / 陀螺仪 | **BMI160** | BOSCH | SSC 配置为 SPI：CS 0 / CS 1，中断 GPIO 117 / 119 |
+| 磁力计 | **AK09915**（不是 AK09918） | AKM | 同一条 SPI 总线，CS 1 |
+| 环境光 / 接近 | **PA22A** | TXC | I2C bus 3，地址 `0x23`；另有一路同总线 `0x1E` |
+| 霍尔（保护套） | BU52053NVX | ROHM | GPIO 124，无总线 |
+
+厂商内核 `mokee_x2_defconfig` 里所有 `CONFIG_SENSORS_*`（BMI160/AKM/MPU 等）全是
+`# ... is not set`，设备树里也没有 sensor 节点；Android 侧 `hals.conf` → `sensors.ssc.so`，
+即 **Qualcomm Sensor Core（SSC / SLPI，跑在 ADSP 上）**。传感器由 ADSP 枚举，内核完全
+不知情。所以主线要自己当总线主控去读芯片。
+
+**步骤**：
+
+1. 在 Debian 里开 `i2c-dev`（SPI 也要 `spidev`），`i2cdetect -y 3` 应能看到 `0x23` / `0x1E`；
+   SPI 侧扫 CS0/CS1 读 chip-id（BMI160 的 `0x00` 寄存器返回 `0xD1`，
+   AK09915 的 WIA2 `0x01` 返回 `0x31`），确认控制器编号（BLSP SPI 几号要实测）。
+2. **内核**：`CONFIG_BMI160`（I2C/SPI 两种前端都编）、`CONFIG_AK09915`（主线是
+   `ak09915` IIO 驱动，走 I2C 时地址 0x0C）、`CONFIG_TSL2772` 不适用——PA22A 没有主线
+   驱动，先写一个最小 IIO 驱动（读 ALS/prox 两个寄存器组），或先只做 bring-up 验证。
+   霍尔直接用 `gpio-keys` 接 GPIO 124。
+3. DTS 节点按实测总线写（`compatible` 用主线字符串，中断接 TLMM GPIO）。
+4. **用户空间**：读 `/sys/bus/iio/devices/iio:device*/` 下的 `in_accel_*_raw`、
+   `in_magn_*_raw`、`in_illuminance_input`、`in_proximity_*`。
+5. 验收：`iio:device` 出现、三个轴数值随手翻转而变、`als` 数值随遮光变化、
+   `prox` 靠近时跳变、霍尔合盖有按键事件。
+
 ## 验收指标
 
 | 维度 | 怎么测 | 目标 |
@@ -109,7 +160,8 @@
 
 ## 需要你确认的一点
 
-阶段 A 会在 Android 的 `/data` 里新增 `/data/debian/debian.img` 一个文件（8 GiB 稀疏，
-实际占用按写入增长）。不改分区、不清数据，但确实动了 Android 的文件系统。
-如果你希望 `/data` 保持一字节不动，那就只能退回"纯 RAM + 每次重来"，或者走 OTG U 盘
-（依赖阶段 D 先完成）。
+阶段 A 的最终形态是在 Android `/data` 里新增一个目录 `/data/debian/root`（不建镜像、
+不格式化、不动分区表）。代价是 Debian 与 Android 不能同时挂载 `/data`，且必须带
+`noload` 跳过 journal replay（见阶段 A 的风险说明）。
+如果你想 `/data` 保持一字节不动，只能退回"纯 RAM + 每次重来"，或等阶段 D 完成后走
+OTG U 盘。

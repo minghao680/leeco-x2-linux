@@ -247,21 +247,45 @@
  */
 &mdss {
 	status = "okay";
+
+	/*
+	 * MDP5 drives INTF0 and INTF1 from a single CRTC for this panel,
+	 * one CTL per interface (see kernel/patches/0005-mdp5-dual-intf.patch
+	 * and docs/mdp5-dual-intf-plan.md).
+	 */
+	qcom,dual-dsi-split;
 };
 
 &mdss_dsi0 {
 	status = "okay";
 
-	vdda-supply = <&vreg_l2a_1p25>;
-	vcca-supply = <&vreg_l28a_0p925>;
+	/*
+	 * Bonded dual-DSI: dsi_mgr_parse_of() reads these from the DSI
+	 * *controller* node, not from the panel node. Bonding gives us a
+	 * single encoder/connector and makes dsi_host halve the timings and
+	 * the pixel clock for each link; MDP5 then feeds INTF0 and INTF1.
+	 */
+	qcom,dual-dsi-mode;
+	qcom,master-dsi;
+	qcom,sync-dual-dsi;
 
+	/*
+	 * NOTE: do NOT give the DSI hosts explicit vddio/vdda/vcca supplies.
+	 * With them bound, msm_dsi toggles L14/L2/L28 around host power-on and
+	 * the link comes up silently dead (backlight on, no picture, fbcon then
+	 * reports fb_set_par -EBUSY). The vendor dtsi deletes vddio-supply for
+	 * this board (rails are always-on); dummy regulators work.
+	 *
+	 * NOTE 2: an earlier attempt enabled bonding without splitting the
+	 * MDP5 side: INTF0 alone carried the full 1440-wide frame while
+	 * dsi_host expected 984 lines per link, so DSI flooded
+	 * dsi_err_worker status=4 (FIFO) with no picture. The mode now uses
+	 * doubled horizontal porches (htotal 1968) and patch 0005 programs
+	 * both INTFs with the per-link timing; keep them together.
+	 */
 	panel@0 {
 		compatible = "sharp,leeco-x2-panel";
 		reg = <0>;
-
-		qcom,dual-dsi-mode;
-		qcom,master-dsi;
-		qcom,sync-dual-dsi;
 
 		reset-gpios = <&tlmm 24 GPIO_ACTIVE_LOW>;
 
@@ -306,8 +330,9 @@
 &mdss_dsi1 {
 	status = "okay";
 
-	vdda-supply = <&vreg_l2a_1p25>;
-	vcca-supply = <&vreg_l28a_0p925>;
+	/* slave link of the bonded pair */
+	qcom,dual-dsi-mode;
+	qcom,sync-dual-dsi;
 };
 
 &mdss_dsi1_out {
@@ -667,8 +692,11 @@
 	/*
 	 * The SMMU is already set up by the bootloader; skipping the context
 	 * bank reset avoids the register writes that hang d00000 on this board.
+	 * Same story for the SMR mask probe: it writes SMR/S2CR and wedges the
+	 * block right after reset, so take the fixed mask values instead.
 	 */
 	qcom,skip-init;
+	qcom,no-smr-check;
 };
 &vfe_smmu	{ status = "disabled"; };
 &venus_smmu	{ status = "disabled"; };
@@ -705,6 +733,24 @@
 
 &pmi8994_wled {
 	status = "okay";
+
+	/*
+	 * Match the panel's real hardware: four LED strings driven at 25 mA
+	 * each out of a 29.5 V boost. The driver defaults (10 mA, 29.6 V)
+	 * leave the panel visibly dark, and downstream mokee uses the same
+	 * 25 mA / 29.5 V combination on x2. The boost switching frequency
+	 * keeps its default (index 11 == 800 kHz, as downstream).
+	 */
+	qcom,enabled-strings = <0 1>;
+	qcom,current-limit-microamp = <25000>;
+	qcom,ovp-millivolt = <29500>;
+
+	/*
+	 * x2 uses the PMIC's internal PFET: the bootloader leaves TEST1 at 0
+	 * and the panel lights up, while selecting the external-PFET DTEST2
+	 * mode (qcom,external-pfet from msm8996.dtsi) leaves every string dark.
+	 */
+	/delete-property/ qcom,external-pfet;
 };
 
 /*

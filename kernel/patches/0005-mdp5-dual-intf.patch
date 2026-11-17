@@ -1,0 +1,568 @@
+diff --git a/drivers/gpu/drm/msm/disp/mdp5/mdp5_crtc.c b/drivers/gpu/drm/msm/disp/mdp5/mdp5_crtc.c
+index 373ae7d..912155c 100644
+--- a/drivers/gpu/drm/msm/disp/mdp5/mdp5_crtc.c
++++ b/drivers/gpu/drm/msm/disp/mdp5/mdp5_crtc.c
+@@ -99,6 +99,18 @@ static u32 crtc_flush(struct drm_crtc *crtc, u32 flush_mask)
+ 
+ 	DBG("%s: flush=%08x", crtc->name, flush_mask);
+ 
++	if (mdp5_cstate->pipeline.dual_intf && mdp5_cstate->ctl_r) {
++		/*
++		 * Each CTL owns its own LM/INTF pair, so flush them separately:
++		 * the paired single-flush path only writes one CTL register and
++		 * leaves LM1's layer configuration unlatched.
++		 */
++		mdp5_ctl_commit(ctl, pipeline, flush_mask, start);
++		mdp5_ctl_commit(mdp5_cstate->ctl_r,
++				&mdp5_cstate->pipeline_r, flush_mask, start);
++		return flush_mask;
++	}
++
+ 	return mdp5_ctl_commit(ctl, pipeline, flush_mask, start);
+ }
+ 
+@@ -352,8 +364,33 @@ static void blend_setup(struct drm_crtc *crtc)
+ 			   val | mixer_op_mode);
+ 	}
+ 
+-	mdp5_ctl_blend(ctl, pipeline, stage, r_stage, plane_cnt,
+-		       ctl_blend_flags);
++	if (pipeline->dual_intf && mdp5_cstate->ctl_r &&
++	    mdp5_cstate->pipeline_r.mixer) {
++		struct mdp5_pipeline left = *pipeline;
++
++		{
++			static bool once;
++
++			if (!once) {
++				once = true;
++				dev_info(mdp5_kms->dev->dev,
++					 "blend dual: planes=%d rpipe=%d lm=%d/%d\n",
++					 plane_cnt,
++					 (int)r_stage[STAGE_BASE][PIPE_RIGHT],
++					 (int)left.mixer->lm,
++					 (int)mdp5_cstate->pipeline_r.mixer->lm);
++			}
++		}
++
++		left.r_mixer = NULL;
++		mdp5_ctl_blend(ctl, &left, stage, NULL, plane_cnt,
++			       ctl_blend_flags);
++		mdp5_ctl_blend(mdp5_cstate->ctl_r, &mdp5_cstate->pipeline_r,
++			       r_stage, NULL, plane_cnt, ctl_blend_flags);
++	} else {
++		mdp5_ctl_blend(ctl, pipeline, stage, r_stage, plane_cnt,
++			       ctl_blend_flags);
++	}
+ out:
+ 	spin_unlock_irqrestore(&mdp5_crtc->lm_lock, flags);
+ }
+@@ -515,6 +552,12 @@ static void mdp5_crtc_atomic_disable(struct drm_crtc *crtc,
+ 		spin_unlock_irqrestore(&mdp5_kms->dev->event_lock, flags);
+ 	}
+ 
++	if (mdp5_cstate->pipeline.dual_intf && mdp5_cstate->ctl_r) {
++		mdp5_write(mdp5_kms, REG_MDP5_SPLIT_DPL_EN, 0);
++		mdp5_write(mdp5_kms, REG_MDP5_SPLIT_DPL_UPPER, 0);
++		mdp5_write(mdp5_kms, REG_MDP5_SPLIT_DPL_LOWER, 0);
++	}
++
+ 	mdp5_crtc->enabled = false;
+ }
+ 
+@@ -624,6 +667,16 @@ static int mdp5_crtc_setup_pipeline(struct drm_crtc *crtc,
+ 		}
+ 	}
+ 
++	/*
++	 * Split display: the right mixer is fed to INTF1 through the second
++	 * CTL, not merged into INTF0 with PACK_3D.
++	 */
++	if (mdp5_cstate->ctl_r && pipeline->r_mixer) {
++		pipeline->dual_intf = true;
++		mdp5_cstate->pipeline_r.mixer = pipeline->r_mixer;
++		mdp5_cstate->pipeline_r.r_mixer = NULL;
++	}
++
+ 	/*
+ 	 * these should have been already set up in the encoder's atomic
+ 	 * check (called by drm_atomic_helper_check_modeset)
+@@ -1272,6 +1325,34 @@ void mdp5_crtc_set_pipeline(struct drm_crtc *crtc)
+ 	mdp_irq_update(&mdp5_kms->base);
+ 
+ 	mdp5_ctl_set_pipeline(mdp5_cstate->ctl, &mdp5_cstate->pipeline);
++
++	if (mdp5_cstate->pipeline.dual_intf && mdp5_cstate->ctl_r) {
++		static bool once;
++
++		mdp5_ctl_set_pipeline(mdp5_cstate->ctl_r,
++				      &mdp5_cstate->pipeline_r);
++
++		/*
++		 * Join the two pipes into one split display.  Vendor values for
++		 * video mode with main INTF0 / slave INTF1: upper pipe ctrl takes
++		 * the main interface's SW trigger mux, lower pipe ctrl the slave
++		 * interface's TG sync.  Without this the second LM never reaches
++		 * INTF1 and the panel sees only one of its two links.
++		 */
++		mdp5_write(mdp5_kms, REG_MDP5_SPLIT_DPL_UPPER,
++			   MDP5_SPLIT_DPL_UPPER_INTF1_SW_TRG_MUX);
++		mdp5_write(mdp5_kms, REG_MDP5_SPLIT_DPL_LOWER,
++			   MDP5_SPLIT_DPL_LOWER_INTF2_TG_SYNC);
++		mdp5_write(mdp5_kms, REG_MDP5_SPLIT_DPL_EN, 1);
++
++		if (!once) {
++			once = true;
++			dev_info(mdp5_kms->dev->dev,
++				 "split display: intf%d + intf%d\n",
++				 mdp5_cstate->pipeline.intf->num,
++				 mdp5_cstate->pipeline_r.intf->num);
++		}
++	}
+ }
+ 
+ struct mdp5_ctl *mdp5_crtc_get_ctl(struct drm_crtc *crtc)
+@@ -1306,6 +1387,24 @@ struct mdp5_pipeline *mdp5_crtc_get_pipeline(struct drm_crtc *crtc)
+ 	return &mdp5_cstate->pipeline;
+ }
+ 
++/* the pipeline an encoder feeds: left by default, right for split display */
++struct mdp5_pipeline *mdp5_crtc_get_pipeline_for(struct drm_crtc *crtc,
++						  struct mdp5_interface *intf)
++{
++	struct mdp5_crtc_state *mdp5_cstate;
++
++	if (WARN_ON(!crtc))
++		return ERR_PTR(-EINVAL);
++
++	mdp5_cstate = to_mdp5_crtc_state(crtc->state);
++
++	if (mdp5_cstate->pipeline.dual_intf &&
++	    mdp5_cstate->pipeline_r.intf == intf)
++		return &mdp5_cstate->pipeline_r;
++
++	return &mdp5_cstate->pipeline;
++}
++
+ void mdp5_crtc_wait_for_commit_done(struct drm_crtc *crtc)
+ {
+ 	struct mdp5_crtc_state *mdp5_cstate = to_mdp5_crtc_state(crtc->state);
+diff --git a/drivers/gpu/drm/msm/disp/mdp5/mdp5_ctl.c b/drivers/gpu/drm/msm/disp/mdp5/mdp5_ctl.c
+index fc183fe..b600b30 100644
+--- a/drivers/gpu/drm/msm/disp/mdp5/mdp5_ctl.c
++++ b/drivers/gpu/drm/msm/disp/mdp5/mdp5_ctl.c
+@@ -157,7 +157,11 @@ static void set_ctl_op(struct mdp5_ctl *ctl, struct mdp5_pipeline *pipeline)
+ 		break;
+ 	}
+ 
+-	if (pipeline->r_mixer)
++	/*
++	 * Source-split into one wide INTF uses 3D packing; a split display
++	 * feeds each mixer to its own INTF, so PACK_3D must stay off.
++	 */
++	if (pipeline->r_mixer && !pipeline->dual_intf)
+ 		ctl_op |= MDP5_CTL_OP_PACK_3D_ENABLE |
+ 			  MDP5_CTL_OP_PACK_3D(1);
+ 
+@@ -591,6 +595,11 @@ int mdp5_ctl_get_ctl_id(struct mdp5_ctl *ctl)
+ /*
+  * mdp5_ctl_pair() - Associate 2 booked CTLs for single FLUSH
+  */
++bool mdp5_ctl_is_paired(struct mdp5_ctl *ctl, struct mdp5_ctl *pair)
++{
++	return ctl->pair == pair;
++}
++
+ int mdp5_ctl_pair(struct mdp5_ctl *ctlx, struct mdp5_ctl *ctly, bool enable)
+ {
+ 	struct mdp5_ctl_manager *ctl_mgr = ctlx->ctlm;
+diff --git a/drivers/gpu/drm/msm/disp/mdp5/mdp5_ctl.h b/drivers/gpu/drm/msm/disp/mdp5/mdp5_ctl.h
+index 9020e8e..49e39eb 100644
+--- a/drivers/gpu/drm/msm/disp/mdp5/mdp5_ctl.h
++++ b/drivers/gpu/drm/msm/disp/mdp5/mdp5_ctl.h
+@@ -35,6 +35,7 @@ int mdp5_ctl_set_encoder_state(struct mdp5_ctl *ctl, struct mdp5_pipeline *p,
+ 
+ int mdp5_ctl_set_cursor(struct mdp5_ctl *ctl, struct mdp5_pipeline *pipeline,
+ 			int cursor_id, bool enable);
++bool mdp5_ctl_is_paired(struct mdp5_ctl *ctl, struct mdp5_ctl *pair);
+ int mdp5_ctl_pair(struct mdp5_ctl *ctlx, struct mdp5_ctl *ctly, bool enable);
+ 
+ #define MAX_PIPE_STAGE		2
+diff --git a/drivers/gpu/drm/msm/disp/mdp5/mdp5_encoder.c b/drivers/gpu/drm/msm/disp/mdp5/mdp5_encoder.c
+index eaba3b2..c0d6753 100644
+--- a/drivers/gpu/drm/msm/disp/mdp5/mdp5_encoder.c
++++ b/drivers/gpu/drm/msm/disp/mdp5/mdp5_encoder.c
+@@ -16,20 +16,106 @@ static struct mdp5_kms *get_kms(struct drm_encoder *encoder)
+ 	return to_mdp5_kms(to_mdp_kms(priv->kms));
+ }
+ 
++/* the second DSI interface that a split display pair drives */
++static struct mdp5_interface *mdp5_split_intf(struct mdp5_kms *mdp5_kms,
++					      struct mdp5_interface *intf)
++{
++	int i;
++
++	if (!mdp5_kms->dual_dsi_split)
++		return NULL;
++
++	for (i = 0; i < mdp5_kms->num_intfs; i++) {
++		struct mdp5_interface *cur = mdp5_kms->intfs[i];
++
++		if (cur == intf || cur->type != INTF_DSI)
++			continue;
++		return cur;
++	}
++
++	return NULL;
++}
++
++/* crtc state of the encoder's CRTC, or NULL during teardown */
++static struct mdp5_crtc_state *mdp5_cstate_of(struct drm_encoder *encoder)
++{
++	if (!encoder->crtc || !encoder->crtc->state)
++		return NULL;
++
++	return to_mdp5_crtc_state(encoder->crtc->state);
++}
++
++static void mdp5_vid_intf_mode_set(struct mdp5_encoder *mdp5_encoder,
++				   struct mdp5_interface *intf,
++				   const struct drm_display_mode *mode,
++				   uint32_t format, uint32_t ctrl_pol)
++{
++	struct mdp5_kms *mdp5_kms = get_kms(&mdp5_encoder->base);
++	uint32_t dtv_hsync_skew = 0;
++	uint32_t vsync_period, vsync_len;
++	uint32_t display_v_start, display_v_end;
++	uint32_t hsync_start_x, hsync_end_x;
++	int intf_num = intf->num;
++	unsigned long flags;
++
++	hsync_start_x = (mode->htotal - mode->hsync_start);
++	hsync_end_x = mode->htotal - (mode->hsync_start - mode->hdisplay) - 1;
++
++	vsync_period = mode->vtotal * mode->htotal;
++	vsync_len = (mode->vsync_end - mode->vsync_start) * mode->htotal;
++	display_v_start = (mode->vtotal - mode->vsync_start) * mode->htotal +
++			  dtv_hsync_skew;
++	display_v_end = vsync_period -
++			((mode->vsync_start - mode->vdisplay) * mode->htotal) +
++			dtv_hsync_skew - 1;
++
++	if (intf->type == INTF_eDP) {
++		display_v_start += mode->htotal - mode->hsync_start;
++		display_v_end -= mode->hsync_start - mode->hdisplay;
++	}
++
++	spin_lock_irqsave(&mdp5_encoder->intf_lock, flags);
++
++	mdp5_write(mdp5_kms, REG_MDP5_INTF_HSYNC_CTL(intf_num),
++		   MDP5_INTF_HSYNC_CTL_PULSEW(mode->hsync_end - mode->hsync_start) |
++		   MDP5_INTF_HSYNC_CTL_PERIOD(mode->htotal));
++	mdp5_write(mdp5_kms, REG_MDP5_INTF_VSYNC_PERIOD_F0(intf_num), vsync_period);
++	mdp5_write(mdp5_kms, REG_MDP5_INTF_VSYNC_LEN_F0(intf_num), vsync_len);
++	mdp5_write(mdp5_kms, REG_MDP5_INTF_DISPLAY_HCTL(intf_num),
++		   MDP5_INTF_DISPLAY_HCTL_START(hsync_start_x) |
++		   MDP5_INTF_DISPLAY_HCTL_END(hsync_end_x));
++	mdp5_write(mdp5_kms, REG_MDP5_INTF_DISPLAY_VSTART_F0(intf_num),
++		   display_v_start);
++	mdp5_write(mdp5_kms, REG_MDP5_INTF_DISPLAY_VEND_F0(intf_num),
++		   display_v_end);
++	mdp5_write(mdp5_kms, REG_MDP5_INTF_BORDER_COLOR(intf_num), 0);
++	mdp5_write(mdp5_kms, REG_MDP5_INTF_UNDERFLOW_COLOR(intf_num), 0xff);
++	mdp5_write(mdp5_kms, REG_MDP5_INTF_HSYNC_SKEW(intf_num), dtv_hsync_skew);
++	mdp5_write(mdp5_kms, REG_MDP5_INTF_POLARITY_CTL(intf_num), ctrl_pol);
++	mdp5_write(mdp5_kms, REG_MDP5_INTF_ACTIVE_HCTL(intf_num),
++		   MDP5_INTF_ACTIVE_HCTL_START(0) |
++		   MDP5_INTF_ACTIVE_HCTL_END(0));
++	mdp5_write(mdp5_kms, REG_MDP5_INTF_ACTIVE_VSTART_F0(intf_num), 0);
++	mdp5_write(mdp5_kms, REG_MDP5_INTF_ACTIVE_VEND_F0(intf_num), 0);
++	mdp5_write(mdp5_kms, REG_MDP5_INTF_PANEL_FORMAT(intf_num), format);
++	/* frame+line count */
++	mdp5_write(mdp5_kms, REG_MDP5_INTF_FRAME_LINE_COUNT_EN(intf_num), 0x3);
++
++	spin_unlock_irqrestore(&mdp5_encoder->intf_lock, flags);
++}
++
+ static void mdp5_vid_encoder_mode_set(struct drm_encoder *encoder,
+ 				      struct drm_display_mode *mode,
+ 				      struct drm_display_mode *adjusted_mode)
+ {
+ 	struct mdp5_encoder *mdp5_encoder = to_mdp5_encoder(encoder);
+-	struct mdp5_kms *mdp5_kms = get_kms(encoder);
+ 	struct drm_device *dev = encoder->dev;
+ 	struct drm_connector *connector;
+-	int intf = mdp5_encoder->intf->num;
+-	uint32_t dtv_hsync_skew, vsync_period, vsync_len, ctrl_pol;
+-	uint32_t display_v_start, display_v_end;
+-	uint32_t hsync_start_x, hsync_end_x;
++	struct mdp5_interface *intf = mdp5_encoder->intf;
++	struct mdp5_crtc_state *mdp5_cstate =
++		encoder->crtc ? to_mdp5_crtc_state(encoder->crtc->state) : NULL;
++	uint32_t ctrl_pol;
+ 	uint32_t format = 0x2100;
+-	unsigned long flags;
+ 
+ 	mode = adjusted_mode;
+ 
+@@ -46,8 +132,6 @@ static void mdp5_vid_encoder_mode_set(struct drm_encoder *encoder,
+ 	}
+ 	/* probably need to get DATA_EN polarity from panel.. */
+ 
+-	dtv_hsync_skew = 0;  /* get this from panel? */
+-
+ 	/* Get color format from panel, default is 8bpc */
+ 	list_for_each_entry(connector, &dev->mode_config.connector_list, head) {
+ 		if (connector->encoder == encoder) {
+@@ -70,50 +154,34 @@ static void mdp5_vid_encoder_mode_set(struct drm_encoder *encoder,
+ 		}
+ 	}
+ 
+-	hsync_start_x = (mode->htotal - mode->hsync_start);
+-	hsync_end_x = mode->htotal - (mode->hsync_start - mode->hdisplay) - 1;
+-
+-	vsync_period = mode->vtotal * mode->htotal;
+-	vsync_len = (mode->vsync_end - mode->vsync_start) * mode->htotal;
+-	display_v_start = (mode->vtotal - mode->vsync_start) * mode->htotal + dtv_hsync_skew;
+-	display_v_end = vsync_period - ((mode->vsync_start - mode->vdisplay) * mode->htotal) + dtv_hsync_skew - 1;
+-
+ 	/*
+-	 * For edp only:
+-	 * DISPLAY_V_START = (VBP * HCYCLE) + HBP
+-	 * DISPLAY_V_END = (VBP + VACTIVE) * HCYCLE - 1 - HFP
++	 * Split display: the panel is bonded across two links, so *both*
++	 * INTFs carry a half of the panel.  dsi_host halves h_total itself,
++	 * which means the INTF timing here has to be the per-link timing
++	 * (720 + 154/100/10 = 984) - feeding INTF0 the full 1968 period
++	 * makes the DSI FIFO overflow immediately.
+ 	 */
+-	if (mdp5_encoder->intf->type == INTF_eDP) {
+-		display_v_start += mode->htotal - mode->hsync_start;
+-		display_v_end -= mode->hsync_start - mode->hdisplay;
++	if (mdp5_cstate && mdp5_cstate->pipeline.dual_intf &&
++	    mdp5_cstate->pipeline_r.intf) {
++		struct drm_display_mode half = *mode;
++
++		half.hdisplay = mode->hdisplay / 2;
++		half.htotal = mode->htotal / 2;
++		half.hsync_start = half.htotal -
++			(mode->htotal - mode->hsync_start) / 2;
++		half.hsync_end = half.hsync_start +
++			(mode->hsync_end - mode->hsync_start) / 2;
++		half.clock = mode->clock / 2;
++
++		mdp5_vid_intf_mode_set(mdp5_encoder, intf, &half, format,
++				       ctrl_pol);
++		mdp5_vid_intf_mode_set(mdp5_encoder,
++				       mdp5_cstate->pipeline_r.intf, &half,
++				       format, ctrl_pol);
++	} else {
++		mdp5_vid_intf_mode_set(mdp5_encoder, intf, mode, format, ctrl_pol);
+ 	}
+ 
+-	spin_lock_irqsave(&mdp5_encoder->intf_lock, flags);
+-
+-	mdp5_write(mdp5_kms, REG_MDP5_INTF_HSYNC_CTL(intf),
+-			MDP5_INTF_HSYNC_CTL_PULSEW(mode->hsync_end - mode->hsync_start) |
+-			MDP5_INTF_HSYNC_CTL_PERIOD(mode->htotal));
+-	mdp5_write(mdp5_kms, REG_MDP5_INTF_VSYNC_PERIOD_F0(intf), vsync_period);
+-	mdp5_write(mdp5_kms, REG_MDP5_INTF_VSYNC_LEN_F0(intf), vsync_len);
+-	mdp5_write(mdp5_kms, REG_MDP5_INTF_DISPLAY_HCTL(intf),
+-			MDP5_INTF_DISPLAY_HCTL_START(hsync_start_x) |
+-			MDP5_INTF_DISPLAY_HCTL_END(hsync_end_x));
+-	mdp5_write(mdp5_kms, REG_MDP5_INTF_DISPLAY_VSTART_F0(intf), display_v_start);
+-	mdp5_write(mdp5_kms, REG_MDP5_INTF_DISPLAY_VEND_F0(intf), display_v_end);
+-	mdp5_write(mdp5_kms, REG_MDP5_INTF_BORDER_COLOR(intf), 0);
+-	mdp5_write(mdp5_kms, REG_MDP5_INTF_UNDERFLOW_COLOR(intf), 0xff);
+-	mdp5_write(mdp5_kms, REG_MDP5_INTF_HSYNC_SKEW(intf), dtv_hsync_skew);
+-	mdp5_write(mdp5_kms, REG_MDP5_INTF_POLARITY_CTL(intf), ctrl_pol);
+-	mdp5_write(mdp5_kms, REG_MDP5_INTF_ACTIVE_HCTL(intf),
+-			MDP5_INTF_ACTIVE_HCTL_START(0) |
+-			MDP5_INTF_ACTIVE_HCTL_END(0));
+-	mdp5_write(mdp5_kms, REG_MDP5_INTF_ACTIVE_VSTART_F0(intf), 0);
+-	mdp5_write(mdp5_kms, REG_MDP5_INTF_ACTIVE_VEND_F0(intf), 0);
+-	mdp5_write(mdp5_kms, REG_MDP5_INTF_PANEL_FORMAT(intf), format);
+-	mdp5_write(mdp5_kms, REG_MDP5_INTF_FRAME_LINE_COUNT_EN(intf), 0x3);  /* frame+line? */
+-
+-	spin_unlock_irqrestore(&mdp5_encoder->intf_lock, flags);
+-
+ 	mdp5_crtc_set_pipeline(encoder->crtc);
+ }
+ 
+@@ -131,6 +199,20 @@ static void mdp5_vid_encoder_disable(struct drm_encoder *encoder)
+ 	if (WARN_ON(!mdp5_encoder->enabled))
+ 		return;
+ 
++	if (mdp5_cstate_of(encoder) && mdp5_cstate_of(encoder)->pipeline.dual_intf &&
++	    mdp5_cstate_of(encoder)->ctl_r) {
++		struct mdp5_crtc_state *cstate = mdp5_cstate_of(encoder);
++		struct mdp5_pipeline *pipeline_r = &cstate->pipeline_r;
++		int intf_r_num = pipeline_r->intf->num;
++
++		mdp5_ctl_set_encoder_state(cstate->ctl_r, pipeline_r, false);
++		spin_lock_irqsave(&mdp5_encoder->intf_lock, flags);
++		mdp5_write(mdp5_kms, REG_MDP5_INTF_TIMING_ENGINE_EN(intf_r_num), 0);
++		spin_unlock_irqrestore(&mdp5_encoder->intf_lock, flags);
++		mdp5_ctl_commit(cstate->ctl_r, pipeline_r,
++				mdp_ctl_flush_mask_encoder(pipeline_r->intf), true);
++	}
++
+ 	mdp5_ctl_set_encoder_state(ctl, pipeline, false);
+ 
+ 	spin_lock_irqsave(&mdp5_encoder->intf_lock, flags);
+@@ -171,6 +253,21 @@ static void mdp5_vid_encoder_enable(struct drm_encoder *encoder)
+ 
+ 	mdp5_ctl_set_encoder_state(ctl, pipeline, true);
+ 
++	if (mdp5_cstate_of(encoder) && mdp5_cstate_of(encoder)->pipeline.dual_intf &&
++	    mdp5_cstate_of(encoder)->ctl_r) {
++		struct mdp5_crtc_state *cstate = mdp5_cstate_of(encoder);
++		struct mdp5_pipeline *pipeline_r = &cstate->pipeline_r;
++		int intf_r_num = pipeline_r->intf->num;
++
++		spin_lock_irqsave(&mdp5_encoder->intf_lock, flags);
++		mdp5_write(mdp5_kms, REG_MDP5_INTF_TIMING_ENGINE_EN(intf_r_num), 1);
++		spin_unlock_irqrestore(&mdp5_encoder->intf_lock, flags);
++
++		mdp5_ctl_commit(cstate->ctl_r, pipeline_r,
++				mdp_ctl_flush_mask_encoder(pipeline_r->intf), true);
++		mdp5_ctl_set_encoder_state(cstate->ctl_r, pipeline_r, true);
++	}
++
+ 	mdp5_encoder->enabled = true;
+ }
+ 
+@@ -221,10 +318,18 @@ static int mdp5_encoder_atomic_check(struct drm_encoder *encoder,
+ 	struct mdp5_crtc_state *mdp5_cstate = to_mdp5_crtc_state(crtc_state);
+ 	struct mdp5_interface *intf = mdp5_encoder->intf;
+ 	struct mdp5_ctl *ctl = mdp5_encoder->ctl;
++	struct mdp5_interface *intf_r = mdp5_split_intf(get_kms(encoder), intf);
+ 
+ 	mdp5_cstate->ctl = ctl;
+ 	mdp5_cstate->pipeline.intf = intf;
+ 
++	/* split display: master encoder also owns the second INTF/CTL */
++	if (intf_r && intf_r->ctl) {
++		mdp5_cstate->ctl_r = intf_r->ctl;
++		mdp5_cstate->pipeline_r.intf = intf_r;
++		mdp5_cstate->pipeline.dual_intf = true;
++	}
++
+ 	/*
+ 	 * This is a bit awkward, but we want to flush the CTL and hit the
+ 	 * START bit at most once for an atomic update.  In the non-full-
+diff --git a/drivers/gpu/drm/msm/disp/mdp5/mdp5_kms.c b/drivers/gpu/drm/msm/disp/mdp5/mdp5_kms.c
+index 61edf68..9f69826 100644
+--- a/drivers/gpu/drm/msm/disp/mdp5/mdp5_kms.c
++++ b/drivers/gpu/drm/msm/disp/mdp5/mdp5_kms.c
+@@ -351,6 +351,9 @@ static int modeset_init_intf(struct mdp5_kms *mdp5_kms,
+ 			break;
+ 		}
+ 
++		/* keep the CTL around: split display needs one per INTF */
++		intf->ctl = ctl;
++
+ 		encoder = construct_encoder(mdp5_kms, intf, ctl);
+ 		if (IS_ERR(encoder)) {
+ 			ret = PTR_ERR(encoder);
+@@ -830,6 +833,21 @@ static int mdp5_dev_probe(struct platform_device *pdev)
+ 
+ 	mdp5_kms->pdev = pdev;
+ 
++	/*
++	 * Boards whose panel is split across two DSI links need this CRTC to
++	 * drive INTF0 and INTF1 at once.  Opt-in from DT so other msm8996
++	 * boards keep the existing single-interface behaviour.  The property
++	 * lives on the parent mdss node: this platform device is
++	 * display-controller@..., not mdss itself.
++	 */
++	mdp5_kms->dual_dsi_split =
++		of_property_read_bool(pdev->dev.of_node, "qcom,dual-dsi-split");
++	if (!mdp5_kms->dual_dsi_split && pdev->dev.of_node->parent)
++		mdp5_kms->dual_dsi_split = of_property_read_bool(
++				pdev->dev.of_node->parent, "qcom,dual-dsi-split");
++	if (mdp5_kms->dual_dsi_split)
++		dev_info(&pdev->dev, "split display enabled (INTF0+INTF1)\n");
++
+ 	spin_lock_init(&mdp5_kms->resource_lock);
+ 
+ 	mdp5_kms->mmio = msm_ioremap(pdev, "mdp_phys");
+diff --git a/drivers/gpu/drm/msm/disp/mdp5/mdp5_kms.h b/drivers/gpu/drm/msm/disp/mdp5/mdp5_kms.h
+index 36b6842..e5aef90 100644
+--- a/drivers/gpu/drm/msm/disp/mdp5/mdp5_kms.h
++++ b/drivers/gpu/drm/msm/disp/mdp5/mdp5_kms.h
+@@ -45,6 +45,9 @@ struct mdp5_kms {
+ 	struct mdp5_smp *smp;
+ 	struct mdp5_ctl_manager *ctlm;
+ 
++	/* one CRTC drives INTF0+INTF1 for a two-link panel */
++	bool dual_dsi_split;
++
+ 	/* io/register spaces: */
+ 	void __iomem *mmio;
+ 
+@@ -112,6 +115,7 @@ struct mdp5_pipeline {
+ 	struct mdp5_interface *intf;
+ 	struct mdp5_hw_mixer *mixer;
+ 	struct mdp5_hw_mixer *r_mixer;	/* right mixer */
++	bool dual_intf;		/* feed each mixer to its own INTF */
+ };
+ 
+ struct mdp5_crtc_state {
+@@ -120,6 +124,14 @@ struct mdp5_crtc_state {
+ 	struct mdp5_ctl *ctl;
+ 	struct mdp5_pipeline pipeline;
+ 
++	/*
++	 * Second CTL/INTF pair used when the panel is split across two DSI
++	 * links: the left mixer feeds INTF0 through @ctl, the right mixer
++	 * feeds INTF1 through @ctl_r.
++	 */
++	struct mdp5_ctl *ctl_r;
++	struct mdp5_pipeline pipeline_r;
++
+ 	/* these are derivatives of intf/mixer state in mdp5_pipeline */
+ 	u32 vblank_irqmask;
+ 	u32 err_irqmask;
+@@ -155,6 +167,7 @@ struct mdp5_interface {
+ 	int num; /* display interface number */
+ 	enum mdp5_intf_type type;
+ 	enum mdp5_intf_mode mode;
++	struct mdp5_ctl *ctl; /* CTL bound to this interface, if any */
+ };
+ 
+ struct mdp5_encoder {
+@@ -282,6 +295,8 @@ uint32_t mdp5_crtc_vblank(struct drm_crtc *crtc);
+ 
+ struct mdp5_hw_mixer *mdp5_crtc_get_mixer(struct drm_crtc *crtc);
+ struct mdp5_pipeline *mdp5_crtc_get_pipeline(struct drm_crtc *crtc);
++struct mdp5_pipeline *mdp5_crtc_get_pipeline_for(struct drm_crtc *crtc,
++						  struct mdp5_interface *intf);
+ void mdp5_crtc_set_pipeline(struct drm_crtc *crtc);
+ void mdp5_crtc_wait_for_commit_done(struct drm_crtc *crtc);
+ struct drm_crtc *mdp5_crtc_init(struct drm_device *dev,
+diff --git a/drivers/gpu/drm/msm/disp/mdp5/mdp5_plane.c b/drivers/gpu/drm/msm/disp/mdp5/mdp5_plane.c
+index 4ca183f..b2b90e8 100644
+--- a/drivers/gpu/drm/msm/disp/mdp5/mdp5_plane.c
++++ b/drivers/gpu/drm/msm/disp/mdp5/mdp5_plane.c
+@@ -179,6 +179,20 @@ static int mdp5_plane_atomic_check_with_state(struct drm_crtc_state *crtc_state,
+ 	max_width = config->hw->lm.max_width << 16;
+ 	max_height = config->hw->lm.max_height << 16;
+ 
++	/*
++	 * Dual-INTF split display scans each LM at half the screen
++	 * width, so the plane must be split into two hwpipes even when
++	 * a single LM could hold the whole width on its own.
++	 */
++	if (crtc_state && to_mdp5_crtc_state(crtc_state)->pipeline.dual_intf) {
++		uint32_t half = (crtc_state->mode.hdisplay << 16) / 2;
++
++		if (!half)
++			half = max_width / 2;
++		if (state->src_w > half)
++			max_width = half;
++	}
++
+ 	/* Make sure source dimensions are within bounds. */
+ 	if (state->src_h > max_height)
+ 		out_of_bounds = true;

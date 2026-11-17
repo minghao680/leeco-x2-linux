@@ -143,8 +143,9 @@ static int leeco_x2_panel_unprepare(struct drm_panel *panel)
 }
 
 /*
- * Combined 1440x2560 @ 60Hz. The porches are the vendor PVT values; each
- * link drives half the width, so hdisplay covers both halves here.
+ * Per-link timing, straight from the vendor PVT dtsi
+ * (dsi-panel-sharp-dualmipi-cmd-le_x2-dvt1_1): each DSI link drives
+ * 720 columns with hfp 154 / hbp 100 / hpw 10.
  */
 #define LEECO_X2_HFP	154
 #define LEECO_X2_HBP	100
@@ -153,13 +154,25 @@ static int leeco_x2_panel_unprepare(struct drm_panel *panel)
 #define LEECO_X2_VBP	7
 #define LEECO_X2_VPW	1
 
+/*
+ * Bonded dual-DSI mode: dsi_host halves h_total, hsync_end, ha_start,
+ * ha_end and hdisplay for each link, so the DRM mode has to carry *twice*
+ * the per-link horizontal porches. 720 + 154/100/10 per link therefore
+ * becomes 1440 + 308/200/20 = 1968 here, and 1968/2 = 984 on the wire.
+ */
+#define LEECO_X2_FULL_HFP	(LEECO_X2_HFP * 2)
+#define LEECO_X2_FULL_HBP	(LEECO_X2_HBP * 2)
+#define LEECO_X2_FULL_HPW	(LEECO_X2_HPW * 2)
+
 static const struct drm_display_mode leeco_x2_default_mode = {
-	.clock = (1440 + LEECO_X2_HFP + LEECO_X2_HBP + LEECO_X2_HPW) *
+	.clock = (1440 + LEECO_X2_FULL_HFP + LEECO_X2_FULL_HBP +
+		  LEECO_X2_FULL_HPW) *
 		 (2560 + LEECO_X2_VFP + LEECO_X2_VBP + LEECO_X2_VPW) * 60 / 1000,
 	.hdisplay = 1440,
-	.hsync_start = 1440 + LEECO_X2_HFP,
-	.hsync_end = 1440 + LEECO_X2_HFP + LEECO_X2_HPW,
-	.htotal = 1440 + LEECO_X2_HFP + LEECO_X2_HPW + LEECO_X2_HBP,
+	.hsync_start = 1440 + LEECO_X2_FULL_HFP,
+	.hsync_end = 1440 + LEECO_X2_FULL_HFP + LEECO_X2_FULL_HPW,
+	.htotal = 1440 + LEECO_X2_FULL_HFP + LEECO_X2_FULL_HPW +
+		  LEECO_X2_FULL_HBP,
 	.vdisplay = 2560,
 	.vsync_start = 2560 + LEECO_X2_VFP,
 	.vsync_end = 2560 + LEECO_X2_VFP + LEECO_X2_VPW,
@@ -169,9 +182,36 @@ static const struct drm_display_mode leeco_x2_default_mode = {
 	.type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
 };
 
+/*
+ * Single-link fallback mode (720x2560, per-link timing). Only advertised
+ * for the secondary connector if the board is ever run un-bonded; the
+ * supported configuration is the bonded 1440x2560 mode above.
+ */
+static const struct drm_display_mode leeco_x2_half_mode = {
+	.clock = (720 + LEECO_X2_HFP + LEECO_X2_HBP + LEECO_X2_HPW) *
+		 (2560 + LEECO_X2_VFP + LEECO_X2_VBP + LEECO_X2_VPW) * 60 / 1000,
+	.hdisplay = 720,
+	.hsync_start = 720 + LEECO_X2_HFP,
+	.hsync_end = 720 + LEECO_X2_HFP + LEECO_X2_HPW,
+	.htotal = 720 + LEECO_X2_HFP + LEECO_X2_HPW + LEECO_X2_HBP,
+	.vdisplay = 2560,
+	.vsync_start = 2560 + LEECO_X2_VFP,
+	.vsync_end = 2560 + LEECO_X2_VFP + LEECO_X2_VPW,
+	.vtotal = 2560 + LEECO_X2_VFP + LEECO_X2_VPW + LEECO_X2_VBP,
+	.width_mm = 34,
+	.height_mm = 121,
+	.type = DRM_MODE_TYPE_DRIVER,
+};
+
 static int leeco_x2_panel_get_modes(struct drm_panel *panel,
 				    struct drm_connector *connector)
 {
+	/* DSI-1 carries the 1440-wide combined mode fbcon uses; DSI-2 only
+	 * advertises the 720-wide right-half mode. */
+	if (strstr(connector->name, "-2"))
+		return drm_connector_helper_get_modes_fixed(connector,
+							    &leeco_x2_half_mode);
+
 	return drm_connector_helper_get_modes_fixed(connector,
 						    &leeco_x2_default_mode);
 }

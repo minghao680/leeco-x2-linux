@@ -1,0 +1,83 @@
+--- a/drivers/video/backlight/qcom-wled.c
++++ b/drivers/video/backlight/qcom-wled.c
+@@ -297,6 +297,8 @@
+ 	enable_irq(wled->ovp_irq);
+ }
+ 
++static void wled_dbg_dump(struct wled *wled, const char *tag);
++
+ static int wled_module_enable(struct wled *wled, int val)
+ {
+ 	int rc;
+@@ -310,6 +312,7 @@
+ 				val << WLED3_CTRL_REG_MOD_EN_SHIFT);
+ 	if (rc < 0)
+ 		return rc;
++	wled_dbg_dump(wled, "module_enable");
+ 
+ 	if (wled->ovp_irq > 0) {
+ 		if (val) {
+@@ -953,9 +956,55 @@
+ 	.enabled_strings = {0, 1, 2},
+ };
+ 
++static void wled_dbg_dump(struct wled *wled, const char *tag)
++{
++	unsigned int v;
++	int i;
++
++	regmap_read(wled->regmap, wled->ctrl_addr + WLED3_CTRL_REG_MOD_EN, &v);
++	dev_info(wled->dev, "wled-dbg %s: mod_en=%#x\n", tag, v);
++	regmap_read(wled->regmap, wled->ctrl_addr + WLED3_CTRL_REG_FAULT_STATUS, &v);
++	dev_info(wled->dev, "wled-dbg %s: fault=%#x\n", tag, v);
++	regmap_read(wled->regmap, wled->ctrl_addr + WLED3_CTRL_REG_INT_RT_STS, &v);
++	dev_info(wled->dev, "wled-dbg %s: rt_sts=%#x\n", tag, v);
++	regmap_read(wled->regmap, wled->ctrl_addr + WLED3_CTRL_REG_OVP, &v);
++	dev_info(wled->dev, "wled-dbg %s: ovp=%#x\n", tag, v);
++	regmap_read(wled->regmap, wled->ctrl_addr + WLED3_CTRL_REG_ILIMIT, &v);
++	dev_info(wled->dev, "wled-dbg %s: ilimit=%#x\n", tag, v);
++	regmap_read(wled->regmap, wled->ctrl_addr + WLED3_CTRL_REG_FREQ, &v);
++	dev_info(wled->dev, "wled-dbg %s: freq=%#x\n", tag, v);
++	regmap_read(wled->regmap, wled->ctrl_addr + WLED3_CTRL_REG_FEEDBACK_CONTROL, &v);
++	dev_info(wled->dev, "wled-dbg %s: fb=%#x\n", tag, v);
++	regmap_read(wled->regmap, wled->ctrl_addr + 0x49, &v);
++	dev_info(wled->dev, "wled-dbg %s: vref=%#x\n", tag, v);
++	regmap_read(wled->regmap, wled->ctrl_addr + 0x4a, &v);
++	dev_info(wled->dev, "wled-dbg %s: mod=%#x\n", tag, v);
++	regmap_read(wled->regmap, wled->ctrl_addr + 0x4b, &v);
++	dev_info(wled->dev, "wled-dbg %s: hyb=%#x\n", tag, v);
++	regmap_read(wled->regmap, wled->ctrl_addr + 0x5e, &v);
++	dev_info(wled->dev, "wled-dbg %s: sc_pro=%#x\n", tag, v);
++	regmap_read(wled->regmap, wled->ctrl_addr + 0xe5, &v);
++	dev_info(wled->dev, "wled-dbg %s: test4=%#x\n", tag, v);
++	regmap_read(wled->regmap, wled->ctrl_addr + 0xf2, &v);
++	dev_info(wled->dev, "wled-dbg %s: trim7p7=%#x\n", tag, v);
++	regmap_read(wled->regmap, wled->ctrl_addr + WLED4_CTRL_REG_TEST1, &v);
++	dev_info(wled->dev, "wled-dbg %s: test1=%#x\n", tag, v);
++	regmap_read(wled->regmap, wled->sink_addr + WLED4_SINK_REG_CURR_SINK, &v);
++	dev_info(wled->dev, "wled-dbg %s: curr_sink=%#x\n", tag, v);
++	for (i = 0; i < wled->cfg.num_strings; i++) {
++		regmap_read(wled->regmap,
++			    wled->sink_addr +
++			    WLED4_SINK_REG_BRIGHT(wled->cfg.enabled_strings[i]), &v);
++		dev_info(wled->dev, "wled-dbg %s: str%d bright=%#x\n", tag,
++			 wled->cfg.enabled_strings[i], v);
++	}
++}
++
+ static int wled4_setup(struct wled *wled)
+ {
+ 	int rc, temp, i, j;
++
++	wled_dbg_dump(wled, "pre");
+ 	u16 addr;
+ 	u8 sink_en = 0;
+ 	u32 sink_cfg;
+@@ -1068,6 +1117,7 @@
+ 	}
+ 
+ 	rc = wled_auto_detection_at_init(wled);
++	wled_dbg_dump(wled, "setup");
+ 
+ 	return rc;
+ }

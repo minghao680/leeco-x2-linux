@@ -8,3 +8,5 @@ kernel-src/
 *.dtb
 *.img
 *.gz
+downstream-run*.log
+device/downstream/dt.img

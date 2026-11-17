@@ -1,0 +1,206 @@
+#!/bin/sh
+# x2 mainline initramfs -> Debian 13 on the userdata partition, USB networking.
+#
+# Boot order:
+#   1. mount /dev/sda9 (userdata, ext4) with -o noload
+#      (journal replay on this partition hangs in D state for minutes and
+#      kills the serial shell, so noload is mandatory)
+#   2. if /data/debian/root looks like a Debian root, chroot into it
+#   3. otherwise fall back to the RAM rootfs (/rootfs.tar.xz in this image)
+#   4. if even that fails, drop to a rescue shell on ttyGS0/ttyMSM0
+#
+# Gadget layout (one configuration, two functions):
+#   acm.usb0 -> /dev/ttyGS0, the rescue console
+#   ncm.usb0 -> usb0, 192.168.42.1/24, busybox udhcpd hands out .10-.20
+
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+busybox mount -t proc  none /proc  2>/dev/null
+busybox mount -t sysfs none /sys   2>/dev/null
+busybox mount -t devtmpfs none /dev 2>/dev/null || busybox mdev -s
+busybox mkdir -p /sys/kernel/config 2>/dev/null
+busybox mount -t configfs none /sys/kernel/config 2>/dev/null
+
+echo
+echo "=== x2 mainline -> Debian 13 (userdata root + NCM) ==="
+busybox cat /proc/version
+
+# ---- USB gadget: ACM console + NCM network -----------------------------------
+G=/sys/kernel/config/usb_gadget/g1
+busybox mkdir -p "$G" 2>/dev/null
+(
+cd "$G" || exit 0
+echo 0x0525 > idVendor
+echo 0xa4a7 > idProduct
+echo 0x0100 > bcdDevice
+echo 0x0200 > bcdUSB
+busybox mkdir -p strings/0x409
+echo "leeco"     > strings/0x409/manufacturer
+echo "x2"        > strings/0x409/product
+echo "x2debian"  > strings/0x409/serialnumber
+busybox mkdir -p configs/c.1/strings/0x409
+echo "acm+ncm"   > configs/c.1/strings/0x409/configuration
+
+busybox mkdir -p functions/acm.usb0
+busybox mkdir -p functions/ncm.usb0
+# Set the netdev name before binding; configfs refuses changes after UDC bind.
+echo usb0 > functions/ncm.usb0/ifname 2>/dev/null
+busybox ln -s functions/acm.usb0 configs/c.1/ 2>/dev/null
+busybox ln -s functions/ncm.usb0 configs/c.1/ 2>/dev/null
+
+UDC=$(busybox ls /sys/class/udc 2>/dev/null | busybox head -1)
+if [ -n "$UDC" ]; then echo "$UDC" > UDC && echo "[init] gadget bound to $UDC"; fi
+)
+
+i=0
+while [ ! -c /dev/ttyGS0 ] && [ $i -lt 25 ]; do busybox sleep 1; i=$((i+1)); done
+echo "[init] waited ${i}s for /dev/ttyGS0"
+
+# Keep init's own log visible on the USB console as well as on tty0.
+if [ -c /dev/ttyGS0 ]; then
+	exec </dev/ttyGS0 >/dev/ttyGS0 2>&1
+fi
+
+# ---- Bring the USB netdev up ------------------------------------------------
+netup() {
+	[ -d /sys/class/net/usb0 ] || return 1
+	busybox ip link set usb0 up
+	busybox ip addr add 192.168.42.1/24 dev usb0 2>/dev/null
+	busybox cat > /tmp/udhcpd.conf <<-EOF
+	start 192.168.42.10
+	end 192.168.42.20
+	interface usb0
+	opt router 192.168.42.1
+	opt dns 192.168.42.1
+	opt subnet 255.255.255.0
+	EOF
+	busybox udhcpd -f /tmp/udhcpd.conf >/dev/null 2>&1 &
+	echo "[init] usb0 up, udhcpd serving 192.168.42.10-20"
+}
+i=0
+while ! netup && [ $i -lt 3 ]; do i=$((i+1)); busybox sleep 1; done
+
+# ---- Rescue shell (initramfs) ----------------------------------------------
+rescue() {
+	echo "[init] entering RESCUE initramfs shell on ttyGS0 / ttyMSM0"
+	for c in /dev/ttyGS0 /dev/ttyMSM0; do
+		[ -c "$c" ] || continue
+		busybox setsid sh -c 'busybox stty sane 2>/dev/null; while :; do sh -i; done' \
+			<"$c" >"$c" 2>&1 &
+	done
+	while :; do busybox sleep 1; done
+}
+
+# ---- Root selection: userdata first, RAM rootfs as fallback ------------------
+ROOT=
+SRC=unknown
+busybox mkdir -p /data 2>/dev/null
+
+# UFS probes asynchronously; /dev/sda9 may not exist yet when PID1 starts.
+i=0
+while [ ! -b /dev/sda9 ] && [ $i -lt 20 ]; do
+	busybox sleep 1
+	i=$((i+1))
+done
+echo "[init] waited ${i}s for /dev/sda9"
+
+if [ -b /dev/sda9 ]; then
+	if busybox mount -o rw,noload /dev/sda9 /data; then
+		echo "[init] /dev/sda9 mounted rw,noload on /data"
+		if [ -x /data/debian/root/usr/bin/bash ] && [ -f /data/debian/root/etc/debian_version ]; then
+			ROOT=/data/debian/root
+			SRC=userdata
+			echo "[init] disk root OK: $(busybox cat $ROOT/etc/debian_version)"
+		else
+			echo "[init] /data/debian/root incomplete -> RAM fallback"
+		fi
+	elif busybox mount -o ro,noload /dev/sda9 /data; then
+		echo "[init] WARNING: journal dirty, mounted read-only."
+		echo "[init] boot Android once and power it off cleanly, then retry."
+		echo "[init] /data/debian/root incomplete -> RAM fallback"
+	else
+		echo "[init] /dev/sda9 mount FAILED -> RAM fallback"
+	fi
+else
+	echo "[init] no /dev/sda9 -> RAM fallback"
+fi
+
+if [ -z "$ROOT" ]; then
+	busybox mkdir -p /newroot
+	if ! busybox mount -t tmpfs -o size=1600M tmpfs /newroot 2>/dev/null; then
+		busybox mount -t tmpfs tmpfs /newroot || { echo "[init] tmpfs failed"; rescue; }
+	fi
+	if [ ! -f /rootfs.tar.xz ]; then
+		echo "[init] FATAL: /rootfs.tar.xz missing"
+		rescue
+	fi
+	echo "[init] unpacking Debian rootfs into RAM, please wait..."
+	( busybox xz -dc /rootfs.tar.xz | busybox tar -xf - -C /newroot ) &
+	pid=$!
+	while kill -0 $pid 2>/dev/null; do
+		echo -n "."
+		busybox sleep 5
+	done
+	wait $pid
+	rc=$?
+	echo
+	if [ $rc -ne 0 ] || [ ! -x /newroot/usr/bin/bash ]; then
+		echo "[init] unpack failed rc=$rc"
+		rescue
+	fi
+	ROOT=/newroot
+	SRC=ram
+	echo "[init] RAM rootfs ready: $(busybox cat /newroot/etc/debian_version 2>/dev/null)"
+fi
+
+# ---- Pseudo filesystems inside the new root --------------------------------
+for d in proc sys dev dev/pts tmp run; do busybox mkdir -p $ROOT/$d; done
+busybox mount --bind /dev  $ROOT/dev  2>/dev/null
+busybox mount --bind /proc $ROOT/proc 2>/dev/null
+busybox mount --bind /sys  $ROOT/sys  2>/dev/null
+busybox mount -t devpts devpts $ROOT/dev/pts 2>/dev/null
+
+# Give the chroot a working network: hand it usb0 and a resolver stub.
+if [ -d /sys/class/net/usb0 ]; then
+	busybox mkdir -p $ROOT/etc
+	busybox rm -f $ROOT/etc/resolv.conf
+	echo "nameserver 192.168.42.1" > $ROOT/etc/resolv.conf
+fi
+
+busybox sed -i 's|^root:[^:]*:|root::|' $ROOT/etc/shadow 2>/dev/null
+
+# ---- sshd ------------------------------------------------------------------
+if [ -x $ROOT/usr/sbin/sshd ]; then
+	busybox mkdir -p $ROOT/run/sshd $ROOT/var/empty $ROOT/root/.ssh
+	if [ ! -f $ROOT/etc/ssh/ssh_host_ed25519_key ]; then
+		busybox chroot $ROOT /usr/bin/ssh-keygen -A >/dev/null 2>&1
+		echo "[init] generated ssh host keys"
+	fi
+	busybox chroot $ROOT /usr/sbin/sshd -p 22 >/dev/null 2>&1
+	busybox sleep 1
+	if busybox netstat -lnt 2>/dev/null | busybox grep -q ':22'; then
+		echo "[init] sshd listening on 192.168.42.1:22"
+	else
+		echo "[init] WARNING: sshd did not start; use the serial console"
+	fi
+fi
+
+echo "[init] root source: $SRC ($ROOT)"
+echo "=== entering Debian 13 userspace ==="
+
+# ---- Interactive Debian shell, respawned forever ---------------------------
+shell_loop() {
+	c=$1
+	busybox setsid sh -c "busybox stty sane 2>/dev/null; while :; do
+		busybox chroot $ROOT /usr/bin/env -i HOME=/root TERM=vt100 \
+			PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+			/bin/bash -i <$c >$c 2>&1
+	echo \"[init] Debian shell on $c exited; respawning\" >$c
+		busybox sleep 2
+	done" </dev/null >/dev/null 2>&1 &
+}
+for c in /dev/ttyGS0 /dev/ttyMSM0; do
+	[ -c "$c" ] && shell_loop $c
+done
+
+while :; do busybox sleep 1; done

@@ -49,11 +49,32 @@
  	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_sCR0, reg);
  }
  
-@@ -2236,6 +2246,7 @@
+@@ -2233,17 +2243,20 @@
+ 
+ 	platform_set_drvdata(pdev, smmu);
+ 
++	dev_info(dev, "smmu-probe: entering reset\n");
  	/* Check for RMRs and install bypass SMRs if any */
  	arm_smmu_rmr_install_bypass_smr(smmu);
  
-+	dev_info(dev, "smmu-probe: calling device_reset\n");
  	arm_smmu_device_reset(smmu);
  	arm_smmu_test_smr_masks(smmu);
  
++	dev_info(dev, "smmu-probe: smr masks done\n");
+ 	err = iommu_device_sysfs_add(&smmu->iommu, smmu->dev, NULL,
+ 				     "smmu.%pa", &smmu->ioaddr);
+ 	if (err)
+ 		return dev_err_probe(dev, err, "Failed to register iommu in sysfs\n");
+ 
++	dev_info(dev, "smmu-probe: sysfs added\n");
+ 	err = iommu_device_register(&smmu->iommu, &arm_smmu_ops,
+ 				    using_legacy_binding ? NULL : dev);
+ 	if (err) {
+@@ -2257,6 +2270,7 @@
+ 	 * can serve as an ideal proxy for that decision. So, conditionally
+ 	 * enable pm_runtime.
+ 	 */
++	dev_info(dev, "smmu-probe: iommu registered\n");
+ 	if (dev->pm_domain) {
+ 		pm_runtime_set_active(dev);
+ 		pm_runtime_enable(dev);

@@ -1,0 +1,48 @@
+#!/bin/sh
+# x2 downstream (3.18) kernel + busybox initramfs -> USB serial shell
+
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+mount -t proc  none /proc  2>/dev/null
+mount -t sysfs none /sys   2>/dev/null
+mount -t devtmpfs none /dev 2>/dev/null || mdev -s
+
+echo
+echo "=== x2 downstream initramfs (3.18 kernel) ==="
+cat /proc/version
+echo "cmdline: $(cat /proc/cmdline)"
+echo
+
+# android_usb: try serial then acm for a ttyGS0 console
+UD=/sys/class/android_usb/android0
+if [ -d "$UD" ]; then
+    echo 0 > "$UD/enable" 2>/dev/null
+    for fn in serial acm; do
+        echo "$fn" > "$UD/functions" 2>/dev/null || continue
+        echo 1 > "$UD/enable" 2>/dev/null
+        sleep 1
+        if [ -c /dev/ttyGS0 ]; then
+            echo "[init] USB $fn OK -> /dev/ttyGS0"
+            break
+        fi
+    done
+else
+    echo "[init] no android_usb sysfs"
+fi
+
+# report device state
+echo "[init] block:"; ls /dev/mmcblk* /dev/sd* 2>/dev/null | head -6
+echo "[init] input:";  ls /dev/input 2>/dev/null | head -4
+echo "[init] mem info:"; head -1 /proc/meminfo
+
+# shell on every console we can get
+for c in /dev/ttyGS0 /dev/ttyMSM0 /dev/console; do
+    [ -c "$c" ] && {
+        echo "[init] shell on $c"
+        setsid sh -i <"$c" >"$c" 2>&1 &
+    }
+done
+
+echo
+echo "=== x2 shell ready (downstream kernel) ==="
+exec sh -i
