@@ -1,0 +1,66 @@
+#!/bin/sh
+# x2 mainline initramfs: exactly one ACM shell on ttyGS0.
+#
+# Lessons learned the hard way:
+#   * /dev/console can alias ttyGS0 -> two shells fight over one tty and the
+#     console goes silent.  Start exactly one shell.
+#   * the tty node appears only after the gadget is bound, so wait for it.
+#   * PID1 must never exit or the kernel panics.
+
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+busybox mount -t proc  none /proc  2>/dev/null
+busybox mount -t sysfs none /sys   2>/dev/null
+busybox mount -t devtmpfs none /dev 2>/dev/null || busybox mdev -s
+
+echo
+echo "=== x2 mainline initramfs (acm) ==="
+cat /proc/version
+echo "cmdline: $(cat /proc/cmdline)"
+
+busybox mkdir -p /sys/kernel/config 2>/dev/null
+busybox mount -t configfs none /sys/kernel/config 2>/dev/null
+
+G=/sys/kernel/config/usb_gadget/g1
+busybox mkdir -p "$G" 2>/dev/null
+(
+cd "$G" || exit 0
+echo 0x0525 > idVendor
+echo 0xa4a7 > idProduct
+busybox mkdir -p strings/0x409
+echo "leeco" > strings/0x409/manufacturer
+echo "x2" > strings/0x409/product
+echo "x2mainline" > strings/0x409/serialnumber
+busybox mkdir -p configs/c.1/strings/0x409
+echo "serial" > configs/c.1/strings/0x409/configuration
+busybox mkdir -p functions/acm.usb0
+busybox ln -s functions/acm.usb0 configs/c.1/ 2>/dev/null
+UDC=$(busybox ls /sys/class/udc 2>/dev/null | busybox head -1)
+if [ -n "$UDC" ]; then
+	echo "$UDC" > UDC && echo "[init] gadget bound to $UDC"
+else
+	echo "[init] no UDC"
+fi
+)
+
+# Wait for the ACM tty to materialise (gadget binding is asynchronous).
+i=0
+while [ ! -c /dev/ttyGS0 ] && [ $i -lt 20 ]; do
+	busybox sleep 1
+	i=$((i+1))
+done
+echo "[init] waited ${i}s for /dev/ttyGS0"
+
+if [ -c /dev/ttyGS0 ]; then
+	echo "[init] starting the one and only shell on /dev/ttyGS0"
+	busybox setsid sh -c 'busybox stty sane 2>/dev/null; while :; do sh -i; done' \
+		</dev/ttyGS0 >/dev/ttyGS0 2>&1 &
+else
+	echo "[init] ERROR: no ttyGS0"
+fi
+
+echo "[init] mem:"; busybox free
+echo "=== x2 shell ready ==="
+
+# PID1 stays alive forever.  Never `exec` a shell here.
+while :; do busybox sleep 1; done
