@@ -649,13 +649,19 @@
 };
 
 /*
- * Bring-up workaround: the media SMMUs are not usable yet on this board.
- * arm-smmu prints the d00000 (mdp_smmu) capabilities and then hangs while
- * resetting it, before UFS/USB ever probe. Keep GPU SMMU (b40000) enabled
- * because it probes cleanly, but disable the display/camera/venus/ADSP SMMUs
- * until their power domains and clocks are brought up properly.
+ * The display SMMU is mandatory: MDP5 refuses to initialise without it.
+ * A boot with mdp_smmu disabled prints
+ *   [drm:mdp5_kms_init] MDP5 version v1.7
+ *   [drm] no IOMMU, bailing out
+ * and then tears the DRM device down again, so the panel never binds and the
+ * screen stays black. Earlier bring-up notes claimed arm-smmu hangs while
+ * resetting d00000 before UFS/USB probe; if that happens again the console log
+ * survives in ramoops (0x91500000) and can be read back after a cold reset.
+ *
+ * vfe/venus/ADSP SMMUs stay off: nothing needs them yet and each one is
+ * another chance to hang early in boot.
  */
-&mdp_smmu	{ status = "disabled"; };
+&mdp_smmu	{ status = "okay"; };
 &vfe_smmu	{ status = "disabled"; };
 &venus_smmu	{ status = "disabled"; };
 &lpass_q6_smmu	{ status = "disabled"; };
@@ -671,16 +677,44 @@
  *   qcom-smbchg     CONFIG_CHARGER_QCOM_SMBCHG (already =y)
  *   qcom_fg         CONFIG_BATTERY_QCOM_FG     (was =m, made =y)
  *   qcom-wled       CONFIG_BACKLIGHT_QCOM_WLED (already =y)
+ *
+ * Both drivers call power_supply_get_battery_info() and follow a
+ * `monitored-battery` phandle, so the pack description below is required:
+ * without it smbchg fails with "Failed to get battery info: -ENOENT" and
+ * never registers, which leaves the board with no battery or charger at all.
  */
 &pmi8996_smbchg {
 	status = "okay";
+
+	monitored-battery = <&battery>;
 };
 
 &pmi8996_fg {
 	status = "okay";
+
+	monitored-battery = <&battery>;
 };
 
 &pmi8994_wled {
 	status = "okay";
+};
+
+/*
+ * Le Max 2 pack: 3.85 V nominal, 4.35 V charge limit, 3100 mAh.
+ * Values from the vendor charger/BMS configuration.
+ */
+/ {
+	battery: battery {
+		compatible = "simple-battery";
+
+		voltage-min-design-microvolt = <3400000>;
+		voltage-max-design-microvolt = <4350000>;
+		energy-full-design-microwatt-hours = <11780000>;
+		charge-full-design-microamp-hours = <3100000>;
+
+		precharge-current-microamp = <200000>;
+		constant-charge-current-max-microamp = <2000000>;
+		charge-term-current-microamp = <200000>;
+	};
 };
 

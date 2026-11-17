@@ -55,9 +55,16 @@ def pad(data: bytes) -> bytes:
 
 
 def main(kernel_path: str, dtb_path: str | None, out_path: str,
-         kernel_addr: int = KERNEL_ADDR, ramdisk_path: str | None = None) -> int:
+         kernel_addr: int = KERNEL_ADDR, ramdisk_path: str | None = None,
+         extra_cmdline: bytes = b"") -> int:
     with open(kernel_path, "rb") as f:
         kernel = f.read()
+
+    # Anything passed with --cmdline is appended to the fixed base cmdline,
+    # e.g. --cmdline "console=tty0" to mirror printk onto the panel once
+    # DRM/fbcon is up, which is how a working DSI link is confirmed on a
+    # board whose UART is not wired.
+    cmdline = CMDLINE + (b" " + extra_cmdline if extra_cmdline else b"")
 
     # The Le Max 2 stock bootloader does NOT honour the header's dt_size field:
     # it rejects images with `dtb not found` unless the DTB is appended *inside*
@@ -86,7 +93,7 @@ def main(kernel_path: str, dtb_path: str | None, out_path: str,
         0,                      # dt_size = 0, dtb lives inside the kernel blob
         0,                      # unused
         BOARD,
-        CMDLINE,
+        cmdline,
         b"",                    # id
         b"",                    # extra cmdline
     )
@@ -110,17 +117,22 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     kernel_addr = KERNEL_ADDR
     ramdisk_path = None
+    extra_cmdline = b""
     if "--ramdisk" in args:
         i = args.index("--ramdisk")
         ramdisk_path = args[i + 1]
+        del args[i:i + 2]
+    if "--cmdline" in args:
+        i = args.index("--cmdline")
+        extra_cmdline = args[i + 1].encode()
         del args[i:i + 2]
     if "--addr" in args:
         i = args.index("--addr")
         kernel_addr = int(args[i + 1], 0)
         del args[i:i + 2]
     if len(args) == 4 and args[0] == "--no-dtb":
-        sys.exit(main(args[1], None, args[3], kernel_addr, ramdisk_path))
+        sys.exit(main(args[1], None, args[3], kernel_addr, ramdisk_path, extra_cmdline))
     if len(args) == 3:
-        sys.exit(main(args[0], args[1], args[2], kernel_addr, ramdisk_path))
+        sys.exit(main(args[0], args[1], args[2], kernel_addr, ramdisk_path, extra_cmdline))
     print(__doc__)
     sys.exit(2)
