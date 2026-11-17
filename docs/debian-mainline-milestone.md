@@ -118,6 +118,58 @@ RNDIS 会落到 Problem 28。
 
 验证通过后，主机侧就能用 `ssh`/`scp` 取代又慢又脆的串口。
 
+## SSH over USB NCM（已验证）
+
+NCM 链路实测结果：
+
+| 项目 | 结果 |
+|---|---|
+| Windows 侧网卡 | 「以太网 9」= `UsbNcm Host Device #3`，ifIndex 99，状态 Up |
+| Windows IP | DHCP 自动拿到 `192.168.42.10/24`，默认路由指向 `192.168.42.1` |
+| 设备侧 | `usb0` = `192.168.42.1/24`，`<BROADCAST,MULTICAST,UP,LOWER_UP>` |
+| 串口 | 仍在，`USB 串行设备 (COM13)`，作救援通道 |
+
+`sshd` 当时不在精简 rootfs 里，只能先在运行时补装：把 `openssh-server` 和四个
+缺的依赖（`openssh-sftp-server`、`ucf`、`runit-helper`、`libwrap0`、`libwtmpdb0`）
+打成 734 KB 的 bundle，用 NCM 推过去（2.2 MB/s），`dpkg -i` 后又踩了两个坑：
+
+- `ucf` 未配置 → `sshd_config` 留在 `/usr/share/openssh/`，没进 `/etc/ssh/`
+- 缺 `sshd` 特权分离用户 → `Privilege separation user sshd does not exist`
+
+补上 `cp /usr/share/openssh/sshd_config /etc/ssh/sshd_config`、`useradd --system
+--home-dir /var/empty --shell /usr/sbin/nologin sshd` 之后，`sshd` 在
+`0.0.0.0:22` 起来，公钥认证可直接登入：
+
+```
+$ ssh -i out/x2_ed25519 root@192.168.42.1
+Linux (none) 6.19.5-msm8996+ #1 SMP PREEMPT ... aarch64 GNU/Linux
+13.7
+```
+
+`scp` 传 90,414,192 B 的原始 rootfs：**18.58 s，4.64 MB/s**，落地 sha256 与原文件
+逐字节一致（`ec8631af…`）。比串口那条路快了三个数量级。
+
+### 固化进镜像
+
+运行时装的东西在 tmpfs 里，重启即失，所以把 sshd 直接烤进 rootfs：
+
+```
+python scripts/overlay-rootfs.py \
+    integration/debian13-slim.tar.xz \
+    integration/overlay \
+    integration/debian13-slim-sshd.tar.xz
+```
+
+`overlay-rootfs.py` 流式拷贝所有未变成员、只重写命中 overlay 的条目，因此不需要
+把 184 MB 解开再打包。结果 `debian13-slim.tar.xz` 36,860,252 → **37,442,264 B**
+（+582 KB），镜像 `boot-va39-debian-sshd.img` = **50,532,352 B**，仍远低于 64 MiB
+的 LK 上限。
+
+`init-debian-net` 在进 chroot 前多做三件事：建 `/run/sshd` 与 `/var/empty`、
+`ssh-keygen -A` 现生成主机密钥（RAM 根每次都是新的，带旧密钥没有意义）、
+`chroot /newroot /usr/sbin/sshd -p 22` 并回读 `netstat -lnt` 确认真的在监听。
+
+
 
 ## 复现步骤
 
