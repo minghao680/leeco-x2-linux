@@ -1,0 +1,138 @@
+#!/bin/sh
+# x2 mainline initramfs -> Debian 13 in RAM, with USB networking.
+#
+# Same as init-debian but the gadget also exposes an NCM (and ECM fallback)
+# network function, so the host gets a real IP link instead of only a serial
+# console.  Windows 11 ships usbncm.inf, whereas RNDIS ends up on
+# CM_PROB_FAILED_INSTALL on this machine.
+#
+# Gadget layout (one configuration, two functions):
+#   acm.usb0 -> /dev/ttyGS0, the rescue console
+#   ncm.usb0 -> usb0, 192.168.42.1/24, busybox udhcpd hands out .10-.20
+
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+busybox mount -t proc  none /proc  2>/dev/null
+busybox mount -t sysfs none /sys   2>/dev/null
+busybox mount -t devtmpfs none /dev 2>/dev/null || busybox mdev -s
+busybox mkdir -p /sys/kernel/config 2>/dev/null
+busybox mount -t configfs none /sys/kernel/config 2>/dev/null
+
+echo
+echo "=== x2 mainline -> Debian 13 (RAM + NCM) ==="
+cat /proc/version
+
+# ---- USB gadget: ACM console + NCM network -----------------------------------
+G=/sys/kernel/config/usb_gadget/g1
+busybox mkdir -p "$G" 2>/dev/null
+(
+cd "$G" || exit 0
+echo 0x0525 > idVendor
+echo 0xa4a7 > idProduct
+echo 0x0100 > bcdDevice
+echo 0x0200 > bcdUSB
+busybox mkdir -p strings/0x409
+echo "leeco"     > strings/0x409/manufacturer
+echo "x2"        > strings/0x409/product
+echo "x2debian"  > strings/0x409/serialnumber
+busybox mkdir -p configs/c.1/strings/0x409
+echo "acm+ncm"   > configs/c.1/strings/0x409/configuration
+
+busybox mkdir -p functions/acm.usb0
+busybox mkdir -p functions/ncm.usb0
+# Set the netdev name before binding; configfs refuses changes after UDC bind.
+echo usb0 > functions/ncm.usb0/ifname 2>/dev/null
+busybox ln -s functions/acm.usb0 configs/c.1/ 2>/dev/null
+busybox ln -s functions/ncm.usb0 configs/c.1/ 2>/dev/null
+
+UDC=$(busybox ls /sys/class/udc 2>/dev/null | busybox head -1)
+if [ -n "$UDC" ]; then echo "$UDC" > UDC && echo "[init] gadget bound to $UDC"; fi
+)
+
+i=0
+while [ ! -c /dev/ttyGS0 ] && [ $i -lt 25 ]; do busybox sleep 1; i=$((i+1)); done
+echo "[init] waited ${i}s for /dev/ttyGS0"
+
+# ---- Bring the USB netdev up ------------------------------------------------
+netup() {
+	[ -d /sys/class/net/usb0 ] || return 1
+	busybox ip link set usb0 up
+	busybox ip addr add 192.168.42.1/24 dev usb0 2>/dev/null
+	busybox cat > /tmp/udhcpd.conf <<-EOF
+	start 192.168.42.10
+	end 192.168.42.20
+	interface usb0
+	opt router 192.168.42.1
+	opt dns 192.168.42.1
+	opt subnet 255.255.255.0
+	EOF
+	busybox udhcpd -f /tmp/udhcpd.conf >/dev/null 2>&1 &
+	echo "[init] usb0 up, udhcpd serving 192.168.42.10-20"
+}
+i=0
+while ! netup && [ $i -lt 3 ]; do i=$((i+1)); busybox sleep 1; done
+
+# ---- Rescue shell (initramfs) ----------------------------------------------
+rescue() {
+	echo "[init] entering RESCUE initramfs shell on ttyGS0"
+	busybox setsid sh -c 'busybox stty sane 2>/dev/null; while :; do sh -i; done' \
+		</dev/ttyGS0 >/dev/ttyGS0 2>&1 &
+	while :; do busybox sleep 1; done
+}
+
+# ---- Unpack the Debian rootfs into RAM -------------------------------------
+busybox mkdir -p /newroot
+if ! busybox mount -t tmpfs -o size=1600M tmpfs /newroot 2>/dev/null; then
+	busybox mount -t tmpfs tmpfs /newroot || { echo "[init] tmpfs failed"; rescue; }
+fi
+
+if [ ! -f /rootfs.tar.xz ]; then
+	echo "[init] FATAL: /rootfs.tar.xz missing"
+	rescue
+fi
+
+echo "[init] unpacking Debian rootfs (184 MB), please wait..."
+( busybox xz -dc /rootfs.tar.xz | busybox tar -xf - -C /newroot ) &
+pid=$!
+while kill -0 $pid 2>/dev/null; do
+	echo -n "."
+	busybox sleep 5
+done
+wait $pid
+rc=$?
+echo
+if [ $rc -ne 0 ] || [ ! -x /newroot/usr/bin/bash ]; then
+	echo "[init] unpack failed rc=$rc"
+	rescue
+fi
+echo "[init] rootfs ready: $(busybox cat /newroot/etc/debian_version 2>/dev/null)"
+
+# ---- Pseudo filesystems inside the new root --------------------------------
+for d in proc sys dev dev/pts tmp run; do busybox mkdir -p /newroot/$d; done
+busybox mount --bind /dev  /newroot/dev  2>/dev/null
+busybox mount --bind /proc /newroot/proc 2>/dev/null
+busybox mount --bind /sys  /newroot/sys  2>/dev/null
+busybox mount -t devpts devpts /newroot/dev/pts 2>/dev/null
+
+# Give the chroot a working network: hand it usb0 and a resolver stub.
+if [ -d /sys/class/net/usb0 ]; then
+	busybox mkdir -p /newroot/etc
+	echo "nameserver 192.168.42.1" > /newroot/etc/resolv.conf
+	echo "[init] wrote /etc/resolv.conf -> 192.168.42.1"
+fi
+
+busybox sed -i 's|^root:[^:]*:|root::|' /newroot/etc/shadow 2>/dev/null
+
+cd /newroot || rescue
+
+echo "=== entering Debian 13 userspace ==="
+
+# ---- Interactive Debian shell, respawned forever ---------------------------
+while :; do
+	busybox chroot /newroot /usr/bin/env -i \
+		HOME=/root TERM=vt100 \
+		PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+		/bin/bash -i </dev/ttyGS0 >/dev/ttyGS0 2>&1
+	echo "[init] Debian shell exited (rc=$?); respawning in 2s"
+	busybox sleep 2
+done

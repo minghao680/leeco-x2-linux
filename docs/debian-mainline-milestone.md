@@ -105,6 +105,20 @@ Booting FAILED (Status read failed (Too many links))
   Problem 28（无驱动）。`sshd` 也没装。
 - `apt update` 需要网络，目前不可用。
 
+## 下一步：NCM 网络版（已构建，待真机验证）
+
+`out/boot-va39-debian-net.img`（49,950,720 B）在 ACM 之外再加一个 **NCM** 网络
+功能，原因很直接：Windows 11 自带 `usbncm.inf` + `usbnet.inf`，而在这台机器上
+RNDIS 会落到 Problem 28。
+
+- gadget：`acm.usb0` + `ncm.usb0`（`ifname=usb0`，绑定前设置，绑定后 configfs 改不动）
+- 设备侧：`usb0` = `192.168.42.1/24`，busybox `udhcpd` 发 `192.168.42.10–20`
+- 进 chroot 前写好 `etc/resolv.conf`，为后续 `apt` 做准备
+- rootfs 与 `init-debian` 版本完全一致，只是多了网络
+
+验证通过后，主机侧就能用 `ssh`/`scp` 取代又慢又脆的串口。
+
+
 ## 复现步骤
 
 ```powershell
