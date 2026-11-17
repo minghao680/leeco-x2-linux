@@ -134,9 +134,15 @@ jobs:
         run: |
           set -e
           cd kernel-src
-          if [ -n "${{ github.event.inputs.config_file }}" ]; then
+          # A push never carries workflow_dispatch inputs, so fall back to the
+          # board config explicitly. Without this, push builds silently used
+          # plain defconfig and produced a kernel that could not boot our rootfs.
+          CFG="${{ github.event.inputs.config_file }}"
+          CFG="${CFG:-kernel/config-pmos-msm8996-va39.aarch64}"
+          echo "config seed: $CFG"
+          if [ -n "$CFG" ] && [ -f "../$CFG" ]; then
             # seed with a full config (e.g. pmOS msm8996), let Kconfig migrate it
-            cp "../${{ github.event.inputs.config_file }}" .config
+            cp "../$CFG" .config
             make ARCH=arm64 LLVM=1 olddefconfig
           else
             make ARCH=arm64 LLVM=1 "${{ github.event.inputs.defconfig || 'defconfig' }}"
