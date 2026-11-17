@@ -1,0 +1,59 @@
+--- a/drivers/iommu/arm/arm-smmu/arm-smmu.c
++++ b/drivers/iommu/arm/arm-smmu/arm-smmu.c
+@@ -1670,15 +1670,19 @@
+ 	int i;
+ 	u32 reg;
+ 
++	dev_info(smmu->dev, "smmu-reset: 1 read GFSR\n");
+ 	/* clear global FSR */
+ 	reg = arm_smmu_gr0_read(smmu, ARM_SMMU_GR0_sGFSR);
++	dev_info(smmu->dev, "smmu-reset: 2 write GFSR\n");
+ 	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_sGFSR, reg);
++	dev_info(smmu->dev, "smmu-reset: 3 GFSR done\n");
+ 
+ 	/*
+ 	 * Reset stream mapping groups: Initial values mark all SMRn as
+ 	 * invalid and all S2CRn as bypass unless overridden.
+ 	 */
+ 
++	dev_info(smmu->dev, "smmu-reset: 4 context banks (%d)\n", smmu->num_context_banks);
+ 	if (!of_find_property(smmu->dev->of_node, "qcom,skip-init", NULL)) {
+ 		/* Make sure all context banks are disabled and clear CB_FSR  */
+ 		for (i = 0; i < smmu->num_context_banks; ++i) {
+@@ -1687,10 +1691,13 @@
+ 		}
+ 	}
+ 
++	dev_info(smmu->dev, "smmu-reset: 5 context banks done\n");
+ 	/* Invalidate the TLB, just in case */
++	dev_info(smmu->dev, "smmu-reset: 6 tlbi\n");
+ 	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_TLBIALLH, QCOM_DUMMY_VAL);
+ 	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_TLBIALLNSNH, QCOM_DUMMY_VAL);
+ 
++	dev_info(smmu->dev, "smmu-reset: 7 tlbi done\n");
+ 	reg = arm_smmu_gr0_read(smmu, ARM_SMMU_GR0_sCR0);
+ 
+ 	/* Enable fault reporting */
+@@ -1719,11 +1726,14 @@
+ 	if (smmu->features & ARM_SMMU_FEAT_EXIDS)
+ 		reg |= ARM_SMMU_sCR0_EXIDENABLE;
+ 
++	dev_info(smmu->dev, "smmu-reset: 8 impl reset\n");
+ 	if (smmu->impl && smmu->impl->reset)
+ 		smmu->impl->reset(smmu);
+ 
+ 	/* Push the button */
++	dev_info(smmu->dev, "smmu-reset: 9 tlb sync\n");
+ 	arm_smmu_tlb_sync_global(smmu);
++	dev_info(smmu->dev, "smmu-reset: 10 final SCR0 write\n");
+ 	arm_smmu_gr0_write(smmu, ARM_SMMU_GR0_sCR0, reg);
+ }
+ 
+@@ -2236,6 +2246,7 @@
+ 	/* Check for RMRs and install bypass SMRs if any */
+ 	arm_smmu_rmr_install_bypass_smr(smmu);
+ 
++	dev_info(dev, "smmu-probe: calling device_reset\n");
+ 	arm_smmu_device_reset(smmu);
+ 	arm_smmu_test_smr_masks(smmu);
+ 

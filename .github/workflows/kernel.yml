@@ -107,6 +107,19 @@ jobs:
             exit 1
           }
 
+      - name: Apply kernel fix patches
+        # Anything dropped into kernel/patches/*.patch is applied to the
+        # kernel tree before the build. Used for surgery the DTS cannot do,
+        # e.g. tracing arm-smmu's reset sequence on msm8996.
+        run: |
+          set -e
+          cd kernel-src
+          shopt -s nullglob
+          for p in ../kernel/patches/*.patch; do
+            echo "=== applying $p"
+            git apply -v "$p"
+          done
+
       - name: Fix upstream panel driver include
         # config-pmos enables panel-sony-synaptics-jdi as a module, but its
         # 6.19 source uses of_device_get_match_data() without including

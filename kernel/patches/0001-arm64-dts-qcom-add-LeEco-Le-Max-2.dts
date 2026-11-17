@@ -661,7 +661,15 @@
  * vfe/venus/ADSP SMMUs stay off: nothing needs them yet and each one is
  * another chance to hang early in boot.
  */
-&mdp_smmu	{ status = "okay"; };
+&mdp_smmu	{
+	status = "okay";
+
+	/*
+	 * The SMMU is already set up by the bootloader; skipping the context
+	 * bank reset avoids the register writes that hang d00000 on this board.
+	 */
+	qcom,skip-init;
+};
 &vfe_smmu	{ status = "disabled"; };
 &venus_smmu	{ status = "disabled"; };
 &lpass_q6_smmu	{ status = "disabled"; };
