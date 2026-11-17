@@ -44,6 +44,22 @@ mdss_mdp.panel=1:dsi:0:qcom,mdss_dsi_sharp_qhd_dualdsi_cmd_le_x2:\
 缺的只是一个绑定 `sharp,leeco-x2-panel` 的驱动，把上表喂进去。工程量从"未知"变成
 "写一个 200 行的 panel driver"。
 
+### 运行时复核（Android 侧实测，不是看文件）
+
+节点名里的 "cmd" 是历史命名遗留，实际跑的是 video：
+
+| 检查 | 结果 |
+|---|---|
+| `/proc/device-tree/soc/qcom,mdss_mdp@900000/qcom,mdss_dsi_sharp_qhd_dualdsi_cmd_le_x2/qcom,mdss-dsi-panel-type` | `dsi_video_mode` |
+| 驱动判定逻辑 `mdss_dsi_panel.c:2763` | 默认 `DSI_VIDEO_MODE`，**只有**字符串等于 `dsi_cmd_mode` 才切 CMD |
+| `/sys/kernel/debug/mdss_panel_fb0/intf0/{xres,yres}` | `720` / `2560` |
+| `intf1/{xres,yres}` | `720` / `2560`（双链路同时在线） |
+| `clk_rate` | 912,522,240（4 lane × 912.5 Mbps/链路，正好压下 720×2560@60@24bpp 加消隐） |
+| `te_tear_check_en` / `te_refx100` | `1` / `6000`（60.00 Hz） |
+
+`te_tear_check_en = 1` 一度看着像 cmd mode，但 tear-check 只是 TE 同步/防撕列的
+可选配置，不参与 MIPI mode 选择；mode 只由 `qcom,mdss-dsi-panel-type` 决定。
+
 背光：`wled@d800` 关着意味着 Linux 无法控制亮度，但 fastboot boot 时 LK 会把背光
 点亮并留在那个状态，所以"屏幕是黑的但看着有背光"——不是面板没供电，是没有图像数据。
 
