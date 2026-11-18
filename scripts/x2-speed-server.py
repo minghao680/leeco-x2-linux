@@ -9,6 +9,7 @@ CHUNK = 1024 * 1024
 # 16 GiB is enough for a 3-minute run at >700 Mbit/s.
 GET_SIZE = 16 * 1024 * 1024 * 1024
 BASE = os.path.dirname(os.path.abspath(__file__))
+BASE_REAL = os.path.realpath(BASE)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -21,8 +22,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path != "/test.bin":
             name = path.lstrip("/")
-            full = os.path.join(BASE, name)
-            if name and os.path.isfile(full):
+            full = os.path.realpath(os.path.join(BASE, name))
+            if name and full.startswith(BASE_REAL + os.sep) and os.path.isfile(full):
                 data = open(full, "rb").read()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/octet-stream")
