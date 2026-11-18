@@ -219,7 +219,7 @@
  *
  * The x2 console is BLSP2_UART1 (uart8) on gpio4/5 = mainline blsp2_uart2
  * (serial@75b0000), exactly as the vendor pinctrl uart_console_active and
- * lk2nd's uart_dm_init(8, BLSP2_UART1_BASE) both show. blsp1_uart2 is the
+ * the downstream uart_dm_init(8, BLSP2_UART1_BASE) both show. blsp1_uart2 is the
  * BT/hs-uart on gpio41-44 - enabling it was wrong.
  */
 &blsp2_uart2 {

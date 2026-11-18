@@ -158,6 +158,6 @@ diff = subprocess.run(
     ['git', '-C', '/home/claude/linux-msm8996', 'diff', '--',
      'drivers/phy/qualcomm/phy-qcom-qmp-ufs.c'],
     check=True, capture_output=True, text=True).stdout
-out = Path('/mnt/g/LeEco-Max2/leeco-x2-nura/kernel/patches/0012-ufs-phy-vendor-calibration.patch')
+out = Path(__file__).resolve().parent.parent / 'kernel/patches/0012-ufs-phy-vendor-calibration.patch'
 out.write_text(diff)
 print(f'wrote {out}: {len(diff.splitlines())} lines')

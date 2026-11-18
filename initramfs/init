@@ -2,7 +2,7 @@
 # x2 minimal initramfs init - goal: get a shell (serial or USB) as early as
 # possible, with no rootfs present.
 #
-# Boot flow on this device: lk2nd -> arm64 kernel -> this initramfs.
+# Boot flow on this device: fastboot -> arm64 kernel -> this initramfs.
 # We bring up:
 #   * /proc /sys /dev
 #   * USB gadget (g_serial -> /dev/ttyGS0) so a host can get a console

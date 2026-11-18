@@ -16,7 +16,7 @@ on:
         required: true
         default: "defconfig"
       config_file:
-        description: "optional full .config to seed with (repo path, e.g. kernel/config-pmos-msm8996.aarch64)"
+        description: "optional full .config to seed with (repo path, e.g. kernel/config-x2-msm8996-va39.aarch64)"
         required: false
         default: ""
       with_panel:
@@ -121,7 +121,7 @@ jobs:
           done
 
       - name: Fix upstream panel driver include
-        # config-pmos enables panel-sony-synaptics-jdi as a module, but its
+        # The seed config enables panel-sony-synaptics-jdi as a module, but its
         # 6.19 source uses of_device_get_match_data() without including
         # <linux/of_device.h>; clang treats that as an implicit declaration.
         run: |
@@ -151,10 +151,10 @@ jobs:
           # board config explicitly. Without this, push builds silently used
           # plain defconfig and produced a kernel that could not boot our rootfs.
           CFG="${{ github.event.inputs.config_file }}"
-          CFG="${CFG:-kernel/config-pmos-msm8996-va39.aarch64}"
+          CFG="${CFG:-kernel/config-x2-msm8996-va39.aarch64}"
           echo "config seed: $CFG"
           if [ -n "$CFG" ] && [ -f "../$CFG" ]; then
-            # seed with a full config (e.g. pmOS msm8996), let Kconfig migrate it
+            # seed with a full config (e.g. the x2 Debian config), let Kconfig migrate it
             cp "../$CFG" .config
             make ARCH=arm64 LLVM=1 olddefconfig
           else
@@ -192,9 +192,9 @@ jobs:
              grep -q DRM_PANEL_SHARP_LEECO_X2 .config; then
             scripts/config --file .config -e DRM_PANEL_SHARP_LEECO_X2
           fi
-          # simpledrm + fbcon MUST be built-in: lk2nd hands the splash
+          # simpledrm + fbcon MUST be built-in: boot firmware hands the splash
           # framebuffer to the kernel via a simple-framebuffer node
-          # (cmdline lk2nd.pass-simplefb), and with DRM=y + SIMPLEDRM=y +
+          # framebuffer to the kernel, and with DRM=y + SIMPLEDRM=y +
           # FRAMEBUFFER_CONSOLE=y the kernel prints its console ON THE
           # PHONE SCREEN - the only visibility we have (no UART on x2).
           # DRM=y is required or SIMPLEDRM can only be =m.

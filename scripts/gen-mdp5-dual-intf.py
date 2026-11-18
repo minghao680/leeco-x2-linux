@@ -16,7 +16,7 @@ import sys
 import tempfile
 
 SRC = os.path.expanduser("~/linux-msm8996")
-REPO = "/mnt/g/LeEco-Max2/leeco-x2-nura"
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SUBDIR = "drivers/gpu/drm/msm/disp/mdp5"
 FILES = ["mdp5_kms.h", "mdp5_kms.c", "mdp5_encoder.c", "mdp5_crtc.c",
          "mdp5_ctl.c", "mdp5_ctl.h", "mdp5_plane.c"]

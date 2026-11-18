@@ -1,84 +1,83 @@
-# LeEco Le Max 2 (x2 / LEX820) → Nura (原 postmarketOS) 主线移植
+# LeEco Le Max 2 (x2 / LEX820) · Linux 6.19 + Debian 13
 
-把乐视 Le Max 2 移植到 [Nura](https://nura.eco)（postmarketOS 于 2026-09-27 更名为 Nura），使用**主线内核**。
+把乐视 Le Max 2 跑成一台可用的 Linux 设备。当前项目使用 `6.19.5-msm8996` 内核、
+Debian 13 用户空间，并保留 Android 10 作为另一套可启动系统。
 
-> 本文档与 `PMOS-PORTING-PLAN.md`（移植计划）配套。计划文档在工作区上级目录，本仓库是**实际代码**。
+## 当前状态
 
-## 设备规格
-
-| 项目 | 值 |
+| 能力 | 状态 |
 |---|---|
-| 代号 | `x2`（内核）/ 拟用 pmaports codename `leeco-x2` |
-| 型号 | LEX820 |
-| SoC | **MSM8996 v3**（骁龙 820，非 8996Pro） |
-| PMIC | PMI8996 |
-| 屏幕 | Sharp 5.7" **1440×2560** dual-DSI（单链路 720×2560），video mode @60Hz |
-| 触摸 | Atmel mXT T100（I2C 12-0x4A） |
-| WiFi/BT | QCA6174（ath10k）+ QCA Rome（hci_qca） |
-| 存储 | Samsung KLUCG4J1CB-B0B1 UFS 2.0 |
-| 传感器 | BMI160 + AK09915 + PA22A |
-| 音频 | WCD9335 + TFA9890（**无 ESS DAC**） |
-| 指纹 | QBT1000（主线无驱动，功能缺失） |
+| 内核 | `6.19.5-msm8996+`，39-bit VA，4 核 / 5.7 GB 可用 |
+| 用户空间 | Debian 13.7，`apt` / `bash` / SSH 可用 |
+| 根文件系统 | userdata 上的目录式根 `/data/debian/root`，可持久化 |
+| UFS | 已修复冷启动 `fDeviceInit` 与高负载持续写问题；两次冷启动、Debian/Android/TWRP 三种热重启均通过 |
+| 显示 | MDP5 双接口，1440×2560 全屏 console 已点亮 |
+| 输入 | Atmel maXTouch 触摸可用；按键映射待补 |
+| 网络 | USB NCM + SSH；USB ACM 串口可作为救援通道 |
+| Android | 与 Debian 共存，userdata 未重分区 |
 
-## 引导链关键参数
+## 启动方式
 
-写 DTS / lk2nd 必须用这些值（已从真机 `/proc/device-tree` 实测）：
+当前阶段由 bootloader 的 `fastboot boot` 内存加载内核、DTB 和 initramfs：
 
-```
-qcom,msm-id   = <246 0x30001>          # = <0xf6 0x30001>
-qcom,board-id = <0x08 0x2e>
-qcom,pmic-id  = <0x20009 0x10013 0x00 0x00>
-```
+1. `fastboot boot out/boot-va39-debian-screen51-normal-pm.img`
+2. initramfs 挂载 `/dev/sda9`，优先进入 `/data/debian/root`
+3. 目录根不可用时回退到 initramfs 内的 RAM rootfs
+4. USB NCM 提供 `192.168.42.1`，串口与 telnet 作为备用入口
 
-boot.img 关键偏移（header v0）：
-
-```
-kernel_addr = 0x80008000
-ramdisk_addr= 0x81000000
-tags_addr   = 0x80000100
-page_size   = 4096
-```
-
-## 为什么用 GitHub Actions 编译
-
-主线内核编译大约需要 **4–8 GB 内存 + 数十 GB 磁盘**，本地机器（15.7 GB / 空闲 2.3 GB）跑不动。
-GitHub Actions 的 `ubuntu-latest` runner 提供 4 核 / 16 GB / 14 GB SSD（+ 可清理出 ~100 GB），足够。
-
-**CI 不做的事**：不刷机。产物下载后由本地 `fastboot` 刷入。
+内核与根文件系统均未写入 boot/system 分区。日常免 fastboot 启动仍是后续工作。
 
 ## 仓库结构
 
+```text
+kernel/                   # 6.19 内核配置、DTS 与补丁
+  config-x2-msm8996-va39.aarch64
+  patches/                # 显示、UFS、DTS 等补丁
+initramfs/                # Debian 启动与救援脚本
+scripts/                  # 构建、打包、串口、UFS 调试工具
+docs/                     # 硬件清单、bring-up 计划与阶段记录
+.github/workflows/        # 当前内核、DTB、面板与 initramfs 的构建检查
 ```
-device/leeco-x2/          # pmaports 设备包（提交给 nura/pmaports 的内容）
-kernel/patches/           # 内核补丁（DTS + 面板驱动），可 rebase 到新版本
-lk2nd/                    # lk2nd 设备支持（提交给 msm8916-mainline/lk2nd）
-.github/workflows/        # CI：内核编译 / 设备包构建 / 镜像打包
-scripts/                  # 本地辅助脚本
+
+## 本地构建
+
+宿主机使用 WSL2 Debian，内核源码树放在 `~/linux-msm8996`：
+
+```sh
+wsl -d Debian -- bash -lc \
+  'cd /mnt/g/LeEco-Max2/leeco-x2-linux && sh scripts/local-build.sh'
 ```
 
-## 当前进度
+脚本会还原干净源码树、应用 `kernel/patches/*.patch`、生成 `.config`，并输出：
 
-- [x] 设备硬件基线采集（见计划文档）
-- [x] 全分区备份
-- [x] 仓库骨架
-- [ ] 阶段 1：最小 DTS + lk2nd，验证能启动
-- [ ] 阶段 2：显示（面板驱动）
-- [ ] 阶段 3：外设
-- [ ] 阶段 4：打包进 pmaports
+```text
+out/local-build/Image.gz
+out/local-build/msm8996-leeco-x2.dtb
+```
 
-## 上游参考
+再使用 `scripts/make-bootimg.py` 把内核、DTB 和 initramfs 打包为 boot 镜像。
 
-| 用途 | 链接 |
-|---|---|
-| Nura 官网 | https://nura.eco |
-| pmaports | https://gitlab.nura.eco/nura/pmaports |
-| 主线内核（msm8996） | https://gitlab.com/msm8996-mainline/linux |
-| lk2nd | https://github.com/msm8916-mainline/lk2nd |
-| 最接近的模板设备 | `device/testing/device-xiaomi-scorpio` (小米 Note 2) |
-| dual-DSI dts 先例 | `msm8996-zte-axon7.dtsi` |
-| 面板驱动基底 | `panel-samsung-s6e3ha2.c` (1440×2560 video mode) |
+## 主要文档
 
-## 免责声明
+- `docs/plan-debian-bringup.md` — 当前路线与阶段状态
+- `docs/ufs-static-analysis.md` — UFS 冷启动和持续写问题的根因与验收矩阵
+- `docs/display-bringup-notes.md` — 双 DSI 面板与 MDP5 双接口点亮过程
+- `docs/mdp5-dual-intf-plan.md` — 全屏显示的正统实现方案
+- `docs/x2-hardware.md` / `docs/x2-sensors.md` — 整机与传感器硬件清单
+- `docs/debian-mainline-milestone.md` — Debian 首次进入用户空间的里程碑记录
+- `docs/debian-peripherals-gap.md` — 尚缺的外设与驱动
+- `docs/fingerprint-qbt1000-analysis.md` — QBT1000 指纹方案分析
 
-刷机有风险。请先备份全部分区（尤其 `modemst1`/`modemst2`/`fsg`/`persist`），这些数据不可再生。
-本仓库代码目前处于**早期开发阶段，未经验证**。
+## 待完成
+
+- 不依赖 fastboot / TWRP 的常态启动
+- WiFi / 蓝牙（QCA6174）
+- USB OTG 与按键映射
+- GPU / freedreno、音频、摄像头
+- 传感器（BMI160、AK09915、PA22A、霍尔）
+- 指纹（QBT1000，受 TrustZone/SSC 限制）
+
+## 注意
+
+刷机有风险。修改分区前先备份 `modemst1`、`modemst2`、`fsg`、`persist` 等不可再生数据。
+仓库中的 boot 镜像目前仍以内存加载验证为主，不要直接把未验收镜像写入 boot 分区。

@@ -2,7 +2,7 @@
 
 日期：2026-11-17
 设备：LeEco Le Max 2（x2 / LEX820，MSM8996 v3 + PMI8996）
-内核：`6.19.5-msm8996+`（`va39-build` 分支，`kernel-x2-29` artifact，VA 39 / PA 48）
+内核：`6.19.5-msm8996+`（`kernel-x2-29` artifact，VA 39 / PA 48）
 状态：**成功。已拿到 Debian 13 的 bash 提示符 `root@(none):/#`。**
 
 ## 结论先行

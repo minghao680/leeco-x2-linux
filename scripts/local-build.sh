@@ -8,7 +8,7 @@
 set -e
 
 SRC=${SRC:-$HOME/linux-msm8996}
-REPO=${REPO:-/mnt/g/LeEco-Max2/leeco-x2-nura}
+REPO=${REPO:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}
 OUT=${OUT:-$REPO/out/local-build}
 JOBS=${JOBS:-8}
 
@@ -44,11 +44,11 @@ for p in "$REPO"/kernel/patches/*.patch; do
 	git apply -v --ignore-whitespace "$p"
 done
 
-cp "$REPO/kernel/config-pmos-msm8996-va39.aarch64" .config
+cp "$REPO/kernel/config-x2-msm8996-va39.aarch64" .config
 sed -i 's/^CONFIG_DEBUG_INFO_BTF=y/# CONFIG_DEBUG_INFO_BTF is not set/' .config
 make olddefconfig >/dev/null
 
-# Same forced options as .github/workflows/kernel.yml: the pmOS seed ships
+# Same forced options as .github/workflows/kernel.yml: the seed config ships
 # DRM_MSM and USB_CONFIGFS as modules, which can never load without a rootfs.
 for opt in ARCH_QCOM DRM_MSM SCSI_UFS_QCOM PHY_QCOM_QMP_UFS \
            TOUCHSCREEN_ATMEL_MXT PINCTRL_MSM8996 QCOM_TSENS ATH10K_PCI; do

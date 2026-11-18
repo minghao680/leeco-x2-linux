@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""Build a minimal Android boot image (header v0) around a raw kernel.
+"""Build a minimal Android boot image (header v0) for the Le Max 2.
 
-Needed because `fastboot boot` on this device wants an ANDROID! header; a bare
-Image.gz+dtb concatenation is not loadable.
-
-The offset values are the ones the Le Max 2 bootloader uses, read back from the
+The stock bootloader requires an ANDROID! header; a bare Image.gz + DTB
+concatenation is not loadable. The offset values below were read back from the
 device's own boot partition:
+
     kernel_addr  = 0x80008000
-    ramdisk_addr = 0x81000000
+    ramdisk_addr = 0x84000000
     tags_addr    = 0x80000100
     page_size    = 4096
 
 Usage:
-    make-bootimg.py <kernel> <dtb> <out.img>   # dtb appended inside kernel blob
-    make-bootimg.py --no-dtb <kernel> <out.img>  # kernel only, let lk2nd supply DTB
+    make-bootimg.py [--ramdisk <initramfs>] [--cmdline "<extra params>"] \
+        <kernel> <dtb> <out.img>
 
-Use --no-dtb when booting from lk2nd: lk2nd embeds the x2 DTB and appends its
-own copy, so a second DTB in the image can conflict with it.
+Examples:
+    make-bootimg.py out/Image.gz out/msm8996-leeco-x2.dtb out/boot.img
+    make-bootimg.py out/Image.gz out/msm8996-leeco-x2.dtb out/boot-debian.img \
+        --ramdisk out/initramfs-debian-disk.gz --cmdline "console=tty0"
 """
 
 import struct
@@ -24,29 +25,17 @@ import sys
 
 PAGE = 4096
 KERNEL_ADDR = 0x80008000
-# The 6.19 arm64 Image decompresses to ~40 MB and is staged at
-# kernel_addr (0x80008000), so it occupies up to ~0x826A0000. The vendor
-# value 0x81000000 sits INSIDE that range - loading a ramdisk there would
-# clobber the kernel (or vice versa). Put the ramdisk after the kernel and
-# after tags_addr (0x83000000) instead.
+# The 6.19 arm64 Image decompresses to about 40 MB and is staged at
+# kernel_addr, so it extends to roughly 0x826A0000. The vendor value
+# 0x81000000 sits inside that range and would clobber the kernel. Keep the
+# ramdisk after the kernel and tags instead.
 RAMDISK_ADDR = 0x84000000
 TAGS_ADDR = 0x80000100
 BOARD = b""
-# pmOS-style cmdline for lk2nd devices: console resolution comes from the
-# DTB's chosen/stdout-path, no console= needed. earlycon uses the same path.
-# panic=15: auto-reboot on panic so crash loops don't need manual recovery.
-#
-# Do NOT add lk2nd.pass-ramoops=zap: it makes lk2nd rewrite the ramoops node
-# to lk2nd's own scratch area near 0xBFF00000 (and zap it), where the stock
-# 3.18 Android kernel cannot read it. Our DTS already places ramoops at
-# 0x91500000 with the exact layout 3.18 expects, so the kernel's pstore log
-# survives a crash and can be read back from Android/TWRP directly.
-CMDLINE = b"earlycon panic=15 lk2nd.pass-simplefb"
-# lk2nd.pass-simplefb: lk2nd adds a /chosen simple-framebuffer node (and a
-# reserved-memory entry) pointing at its still-refreshed splash framebuffer
-# (1440x2560 r8g8b8 @ 0x83400000). With CONFIG_DRM_SIMPLEDRM=y +
-# CONFIG_FRAMEBUFFER_CONSOLE=y the kernel prints its console on the phone
-# screen - the only visibility on this UART-less board.
+
+# earlycon uses the DTB stdout path; panic=15 auto-reboots a crashed kernel.
+# Extra params such as console=tty0 are appended by --cmdline.
+CMDLINE = b"earlycon panic=15"
 
 
 def pad(data: bytes) -> bytes:
@@ -54,28 +43,21 @@ def pad(data: bytes) -> bytes:
     return data + b"\0" * (PAGE - rem if rem else 0)
 
 
-def main(kernel_path: str, dtb_path: str | None, out_path: str,
+def main(kernel_path: str, dtb_path: str, out_path: str,
          kernel_addr: int = KERNEL_ADDR, ramdisk_path: str | None = None,
          extra_cmdline: bytes = b"") -> int:
     with open(kernel_path, "rb") as f:
         kernel = f.read()
+    with open(dtb_path, "rb") as f:
+        dtb = f.read()
 
-    # Anything passed with --cmdline is appended to the fixed base cmdline,
-    # e.g. --cmdline "console=tty0" to mirror printk onto the panel once
-    # DRM/fbcon is up, which is how a working DSI link is confirmed on a
-    # board whose UART is not wired.
     cmdline = CMDLINE + (b" " + extra_cmdline if extra_cmdline else b"")
 
-    # The Le Max 2 stock bootloader does NOT honour the header's dt_size field:
-    # it rejects images with `dtb not found` unless the DTB is appended *inside*
-    # the kernel segment. The stock boot.img does exactly that (dt_size=0 in the
-    # header, 33 DTBs concatenated after the gzipped kernel), so we mirror that
-    # layout here.
-    #
-    # With --no-dtb we skip the append entirely: lk2nd embeds the x2 DTB and
-    # appends it itself, so sending a second copy risks a conflicting DTB.
-    kernel_blob = kernel if dtb_path is None else kernel + open(dtb_path, "rb").read()
-    dtb_len = len(kernel_blob) - len(kernel)
+    # The stock bootloader ignores header dt_size and rejects images with
+    # "dtb not found" unless the DTB is appended inside the kernel segment.
+    # Mirror the stock boot.img layout: dt_size=0 and DTB concatenated after
+    # the gzipped kernel.
+    kernel_blob = kernel + dtb
 
     ramdisk = b"" if ramdisk_path is None else open(ramdisk_path, "rb").read()
 
@@ -84,13 +66,13 @@ def main(kernel_path: str, dtb_path: str | None, out_path: str,
         b"ANDROID!",
         len(kernel_blob),       # kernel_size covers kernel + appended dtb
         kernel_addr,
-        len(ramdisk),           # ramdisk_size (0 when None)
+        len(ramdisk),
         RAMDISK_ADDR,
         0,                      # no second stage
         0,
         TAGS_ADDR,
         PAGE,
-        0,                      # dt_size = 0, dtb lives inside the kernel blob
+        0,                      # dt_size = 0; DTB lives inside kernel blob
         0,                      # unused
         BOARD,
         cmdline,
@@ -105,7 +87,7 @@ def main(kernel_path: str, dtb_path: str | None, out_path: str,
             f.write(pad(ramdisk))
 
     print(f"kernel      : {len(kernel)} bytes")
-    print(f"dtb         : {dtb_len} bytes" + ("  (--no-dtb mode)" if dtb_len == 0 else ""))
+    print(f"dtb         : {len(dtb)} bytes")
     print(f"kernel blob : {len(kernel_blob)} bytes")
     print(f"ramdisk     : {len(ramdisk)} bytes")
     print(f"kernel addr : {kernel_addr:#x}")
@@ -130,9 +112,8 @@ if __name__ == "__main__":
         i = args.index("--addr")
         kernel_addr = int(args[i + 1], 0)
         del args[i:i + 2]
-    if len(args) == 4 and args[0] == "--no-dtb":
-        sys.exit(main(args[1], None, args[3], kernel_addr, ramdisk_path, extra_cmdline))
     if len(args) == 3:
-        sys.exit(main(args[0], args[1], args[2], kernel_addr, ramdisk_path, extra_cmdline))
+        sys.exit(main(args[0], args[1], args[2], kernel_addr, ramdisk_path,
+                      extra_cmdline))
     print(__doc__)
     sys.exit(2)

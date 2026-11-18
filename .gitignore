@@ -4,9 +4,4 @@ out/
 kernel-src/
 *.img
 *.dtb
-*.gzout/
-*.dtb
-*.img
 *.gz
-downstream-run*.log
-device/downstream/dt.img
