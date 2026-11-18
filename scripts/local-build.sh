@@ -76,4 +76,13 @@ make -j"$JOBS" Image.gz qcom/msm8996-leeco-x2.dtb
 
 cp arch/arm64/boot/Image.gz "$OUT"/Image.gz
 cp arch/arm64/boot/dts/qcom/msm8996-leeco-x2.dtb "$OUT"/msm8996-leeco-x2.dtb
+
+if [ "${BUILD_MODULES:-0}" = 1 ]; then
+	make -j"$JOBS" modules
+	rm -rf "$OUT/modules-root"
+	make INSTALL_MOD_PATH="$OUT/modules-root" INSTALL_MOD_STRIP=1 modules_install >/dev/null
+	tar -C "$OUT/modules-root" -cJf "$OUT/modules.tar.xz" lib/modules
+	echo "modules: $OUT/modules.tar.xz"
+fi
+
 ls -l "$OUT"
