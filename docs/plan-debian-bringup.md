@@ -103,10 +103,11 @@
 4. `firmware_class` path 必须在加载前指向 rootfs firmware，且 `timeout=1`；
    `timeout=0` 会无限等待 `firmware_fallback_sysfs`。`regulatory.db` 的绝对
    alternatives 符号链接在 initramfs 下失效，需换成真实文件。
-5. 验收结果：`wlan0` 关联 `？？？5G`（5180 MHz，VHT80 2×2，-27 dBm），DHCP
+5. 验收结果：`wlan0` 关联已保存的 5GHz AP（5180 MHz，VHT80 2×2，-27 dBm），DHCP
    `192.168.1.173/24`，`ping 223.5.5.5` 15–24 ms，阿里云三个 apt 源全部 `Hit`。
-6. 下一步：BT `hci_qca` + `btqca`（BT_EN 为 PM8994 GPIO19）；WiFi 自动连接、
-   `iperf3` 吞吐和 24 h 稳定性测试。
+6. 下一步：BT `hci_qca` + `btqca`（BT_EN 为 PM8994 GPIO19）；WiFi 自动连接、24 h
+   稳定性测试。当前 5 min HTTP 持续下行 37.4 MB/s、ping 300/300、0% 丢包；
+   `iperf3` 被 Windows/WSL 环境挡住，详见 `docs/wireless-bringup.md`。
 
 ## 阶段 F：GPU 与媒体（P3）
 
@@ -153,7 +154,7 @@
 |---|---|---|
 | CPU | `sysbench cpu`、7z 基准 | 与 Android 同频跑分差距 < 10% |
 | 存储 | `dd` 顺序 + 4K 随机 | 顺序 ≥ 300 MB/s（UFS 2.0 量级） |
-| 网络 | `iperf3` over NCM / WiFi | NCM 已 4.64 MB/s；WiFi 看能不能上 100 Mb/s |
+| 网络 | HTTP/TCP over NCM / WiFi | NCM 已 4.64 MB/s；WiFi 实测 301 Mbit/s 下行、311 Mbit/s 上行 |
 | 图形 | `glmark2` | 需阶段 F 完成后才有意义 |
 | 稳定性 | 24 h 连续跑 + 温度 | 不热降频死机，温度 < 45 °C |
 
