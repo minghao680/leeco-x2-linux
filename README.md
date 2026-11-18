@@ -24,6 +24,7 @@ Debian 13 用户空间，并保留 Android 10 作为另一套可启动系统。
 2. initramfs 挂载 `/dev/sda9`，优先进入 `/data/debian/root`
 3. 目录根不可用时回退到 initramfs 内的 RAM rootfs
 4. USB NCM 提供 `192.168.42.1`，串口与 telnet 作为备用入口
+5. WiFi 手动拉起：`ROOT=/data/debian/root /data/debian/root/usr/local/sbin/x2-wifi-up.sh`
 
 内核与根文件系统均未写入 boot/system 分区。日常免 fastboot 启动仍是后续工作。
 

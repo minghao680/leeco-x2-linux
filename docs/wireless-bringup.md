@@ -220,6 +220,29 @@ PING 223.5.5.5: 2 packets transmitted, 2 received, 0% packet loss
 rtt min/avg/max/mdev = 15.121/19.610/24.100/4.489 ms
 ```
 
+## 蓝牙现场（2026-11-18）
+
+`hci_uart.ko`、`btqca.ko`、`bluetooth.ko` 都已加载，serdev 设备也已经生成：
+
+```text
+/sys/bus/serial/devices/serial0-0
+modalias: of:NbluetoothT(null)Cqcom,qca6174-bt
+/sys/bus/serial/drivers/hci_uart_qca
+```
+
+但绑定 `serial0-0` 时返回失败，dmesg 只有：
+
+```text
+Bluetooth: serdev registration failed
+```
+
+打开 `hci_qca` 的 dynamic debug 后能看到 probe 走到
+`UART will pick default operating speed`，但没有 `qca_open` 的 `BT_DBG`，说明失败发生在
+`hci_uart_register_device()` 内部、`qca_open` 之前，最可能是
+`serdev_device_open()` / `ttyport_open()`。`msm_serial 7570000.serial` 已经注册
+`ttyMSM0`，所以下一步是给 `hci_qca.c` 的失败分支补 `err` 值，或直接检查
+`serdev-ttyport.c:ttyport_open()` 的 `tty->ops->open()` 返回码。
+
 ## 还没做
 
 - 开机自动加载 `ath10k`、自动连 WiFi、自动 DHCP（当前是手动跑脚本）。
