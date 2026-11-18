@@ -43,7 +43,11 @@
 	qcom,board-id = <0x08 0x2e>;
 
 	aliases {
+		/* BLSP2 UART2 is the debug console and keeps ttyMSM0. */
 		serial0 = &blsp2_uart2;
+		/* BLSP1 UART2 is the QCA6174 HCI transport and must not share
+		 * line 0 with the console. */
+		serial1 = &blsp1_uart2;
 	};
 
 	chosen {

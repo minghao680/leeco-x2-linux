@@ -262,24 +262,44 @@ modalias: of:NbluetoothT(null)Cqcom,qca6174-bt
 /sys/bus/serial/drivers/hci_uart_qca
 ```
 
-但绑定 `serial0-0` 时返回失败，dmesg 只有：
+在 `hci_serdev.c` 的 `serdev_device_open()` 失败分支临时补上 errno 后，抓到：
 
 ```text
-Bluetooth: serdev registration failed
+hci_uart_qca serial0-0: serdev_device_open failed: -6
+Bluetooth: serdev registration failed: -6
 ```
 
-打开 `hci_qca` 的 dynamic debug 后能看到 probe 走到
-`UART will pick default operating speed`，但没有 `qca_open` 的 `BT_DBG`，说明失败发生在
-`hci_uart_register_device()` 内部、`qca_open` 之前，最可能是
-`serdev_device_open()` / `ttyport_open()`。`msm_serial 7570000.serial` 已经注册
-`ttyMSM0`，所以下一步是给 `hci_qca.c` 的失败分支补 `err` 值，或直接检查
-`serdev-ttyport.c:ttyport_open()` 的 `tty->ops->open()` 返回码。
+`-6` 是 `-ENXIO`。继续追到 `ttyport_open()` → `uart_open()` →
+`uart_port_activate()`：`msm_serial` 把 **debug console `blsp2_uart2`（75b0000）**
+和 **BT `blsp1_uart2`（7570000）** 都分配到了 line 0。DTS 的 alias 只有：
+
+```dts
+aliases { serial0 = &blsp2_uart2; };
+```
+
+蓝牙节点没有 alias，`msm_serial_probe()` 用递增 id 也拿到 0；日志里两个 UART
+都打印 `detected port #0`，第二个 probe 以 `-22` 失败。蓝牙 serdev 最终打开
+的 tty port 因此不是可用的 BT line。
+
+当前修正：
+
+```dts
+aliases {
+	serial0 = &blsp2_uart2; /* debug console */
+	serial1 = &blsp1_uart2; /* QCA6174 HCI */
+};
+```
+
+这样 console 保持 `ttyMSM0`，蓝牙走 line 1。DTB 已重新编译并打进
+`out/boot-x2-debian-wifi-ssh-btline.img`，**尚未完成实机启动验证**；下次启动
+需要确认 `serial0-0` 是否出现、`qca_open` 是否执行、`/sys/class/bluetooth/hci0`
+是否生成。
 
 ## 还没做
 
-- 开机自动加载 `ath10k`、自动连 WiFi、自动 DHCP（当前是手动跑脚本）。
 - 24 h 长稳/iperf3 原始 TCP 对比；当前只有 5 min HTTP 持续下行 + ping。
-- 蓝牙：`hci_uart` + `btqca`，BT_EN 为 PM8994 GPIO19，固件文件已在 rootfs。
+- 蓝牙：`hci_uart` + `btqca`，BT_EN 为 PM8994 GPIO19，固件文件已在 rootfs；
+  先验证上面的 serial1 修正，再处理 QCA 固件加载。
 - `firmware-6` + 正确的 `board-2` 是否能把速率/稳定性做得更好，留作 A/B。
 - `Reason 7` deauth 的 AP/省电时序 A/B（关 `power_save`、换 AP 信道）。
 - RTC 持久化/NTP，避免每次开机都回到 1970。

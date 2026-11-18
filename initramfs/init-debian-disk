@@ -162,6 +162,7 @@ fi
 
 # ---- Pseudo filesystems inside the new root --------------------------------
 for d in proc sys dev dev/pts tmp run; do busybox mkdir -p $ROOT/$d; done
+printf 'x2\n' > "$ROOT/etc/hostname"
 busybox mount --bind /dev  $ROOT/dev  2>/dev/null
 busybox mount --bind /proc $ROOT/proc 2>/dev/null
 busybox mount --bind /sys  $ROOT/sys  2>/dev/null
@@ -174,7 +175,79 @@ if [ -d /sys/class/net/usb0 ]; then
 	echo "nameserver 192.168.42.1" > $ROOT/etc/resolv.conf
 fi
 
-busybox sed -i 's|^root:[^:]*:|root::|' $ROOT/etc/shadow 2>/dev/null
+# ---- WiFi: always on --------------------------------------------------------
+# This is the single production init.  There is no separate "with WiFi" image:
+# every boot tries QCA6174 first, and falls back to usb0/NCM only if the radio
+# or the saved WPA profile is unavailable.  wpa_supplicant and dhcpcd stay
+# resident, exactly like a normal Linux network service.
+wifi_up() {
+	[ -x "$ROOT/usr/sbin/wpa_supplicant" ] || {
+		echo "[init] wpa_supplicant missing; leaving usb0 only"
+		return 0
+	}
+	[ -f "$ROOT/etc/wpa_supplicant/wpa_supplicant-wlan0.conf" ] || {
+		echo "[init] no wpa_supplicant-wlan0.conf; leaving usb0 only"
+		return 0
+	}
+
+	[ -w /sys/module/firmware_class/parameters/path ] && \
+		printf '%s' "$ROOT/lib/firmware" > /sys/module/firmware_class/parameters/path
+	[ -w /sys/class/firmware/timeout ] && echo 1 > /sys/class/firmware/timeout
+
+	busybox chroot "$ROOT" /usr/sbin/modprobe cfg80211 2>/dev/null || true
+	busybox chroot "$ROOT" /usr/sbin/modprobe ath10k_pci 2>/dev/null || true
+
+	i=0
+	while [ ! -d /sys/class/net/wlan0 ] && [ $i -lt 20 ]; do
+		busybox sleep 1
+		i=$((i+1))
+	done
+	if [ ! -d /sys/class/net/wlan0 ]; then
+		echo "[init] wlan0 did not appear; WiFi disabled this boot"
+		busybox dmesg | busybox grep -i ath10k | busybox tail -n 10
+		return 0
+	fi
+
+	busybox chroot "$ROOT" /usr/sbin/rfkill unblock all 2>/dev/null || true
+	busybox chroot "$ROOT" /usr/sbin/iw reg set CN 2>/dev/null || true
+	busybox chroot "$ROOT" /usr/sbin/ip link set wlan0 up
+	busybox killall wpa_supplicant 2>/dev/null || true
+	busybox sleep 1
+	busybox chroot "$ROOT" /usr/sbin/wpa_supplicant -B -D nl80211 -i wlan0 \
+		-c /etc/wpa_supplicant/wpa_supplicant-wlan0.conf \
+		-P /run/wpa_supplicant-wlan0.pid
+
+	i=0
+	while [ $i -lt 20 ]; do
+		if busybox chroot "$ROOT" /usr/sbin/iw dev wlan0 link 2>/dev/null | \
+			busybox grep -q 'Connected'; then
+			break
+		fi
+		busybox sleep 1
+		i=$((i+1))
+	done
+
+	# Keep the radio out of 802.11 power save: the x2 is used as a desk
+	# Linux box and the extra latency hurts SSH/OTG testing.
+	busybox chroot "$ROOT" /usr/sbin/iw dev wlan0 set power_save off 2>/dev/null || true
+	busybox chroot "$ROOT" /usr/sbin/dhcpcd -4 -t 20 wlan0 || true
+
+	# init wrote the NCM resolver stub before WiFi existed.  Once wlan0 owns
+	# the default route, point the chroot at the WiFi DNS instead.
+	if busybox chroot "$ROOT" /usr/sbin/ip route 2>/dev/null | \
+		busybox grep -q '^default via .* dev wlan0'; then
+		printf 'nameserver %s\nnameserver %s\n' "${WIFI_DNS1:-192.168.1.1}" \
+			"${WIFI_DNS2:-223.5.5.5}" > "$ROOT/etc/resolv.conf"
+	fi
+
+	echo "[init] WiFi state:"
+	busybox chroot "$ROOT" /usr/sbin/iw dev wlan0 link || true
+	busybox chroot "$ROOT" /usr/sbin/ip -4 addr show wlan0 || true
+}
+wifi_up
+
+# Keep the root password in /etc/shadow.  initramfs must not reset it on every
+# boot, otherwise password-auth SSH would silently stop working.
 
 # ---- sshd ------------------------------------------------------------------
 if [ -x $ROOT/usr/sbin/sshd ]; then

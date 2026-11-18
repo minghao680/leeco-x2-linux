@@ -19,8 +19,9 @@ boot/system。
 | UFS | 已修复冷启动 `fDeviceInit` 与高负载持续写；两次冷启动、Debian/Android/TWRP 三种热重启均通过 |
 | 显示 | MDP5 双接口，1440×2560 全屏 console 已点亮 |
 | 输入 | Atmel maXTouch 触摸可用；按键映射待补 |
-| WiFi | QCA6174 5GHz/WPA2、DHCP、外网、阿里云 apt；实测约 300 Mbit/s |
-| 蓝牙 | QCA6174 驱动/固件未完成，serdev 绑定失败（见已知问题） |
+| WiFi | QCA6174 5GHz/WPA2，开机自动连接、DHCP、外网、阿里云 apt；实测约 300 Mbit/s |
+| 远程登录 | `sshd` 开机自动启动，root 密码登录，监听 `0.0.0.0:22` |
+| 蓝牙 | QCA6174 驱动/固件；已定位为 UART line 冲突，DTB 修正待启动验证 |
 | Android | 与 Debian 共存，userdata 未重分区 |
 
 ## 快速入口
@@ -28,7 +29,7 @@ boot/system。
 当前阶段由 bootloader 的 `fastboot boot` 内存加载内核、DTB 和 initramfs：
 
 ```sh
-fastboot boot out/boot-va39-debian-screen52-regload-only.img
+fastboot boot out/boot-x2-debian-wifi-ssh-btline.img
 ```
 
 启动后：
@@ -36,11 +37,12 @@ fastboot boot out/boot-va39-debian-screen52-regload-only.img
 1. initramfs 挂载 `/dev/sda9`，优先进入 `/data/debian/root`
 2. 目录根不可用时回退到 initramfs 内的 RAM rootfs
 3. USB NCM 提供 `192.168.42.1`，串口与 telnet 作为备用入口
-4. WiFi 手动拉起：
+4. `init-debian-disk` 自动加载 QCA6174、连接已保存的 WPA 网络、DHCP，并关闭
+   `power_save`
+5. rootfs 中存在 `/usr/sbin/sshd` 时自动启动 SSH；root 密码登录，默认端口 22
 
-```sh
-ROOT=/data/debian/root /data/debian/root/usr/local/sbin/x2-wifi-up.sh
-```
+WiFi 不可用或没有 WPA 配置时，启动不会阻塞，USB NCM 仍然保留。手动重建
+WiFi 仍可使用 `scripts/x2-wifi-up.sh`。
 
 内核和根文件系统均未写入 boot/system 分区；日常免 fastboot 启动仍是后续工作。
 
@@ -50,7 +52,7 @@ ROOT=/data/debian/root /data/debian/root/usr/local/sbin/x2-wifi-up.sh
 kernel/                   # 6.19 内核配置、DTS、补丁与面板驱动
   config-x2-msm8996-va39.aarch64
   patches/
-initramfs/                # Debian 启动、救援与 NCM 脚本
+initramfs/                # Debian 启动、救援与 NCM 脚本；生产入口只有 init-debian-disk
 scripts/                  # 构建、打包、串口、UFS 调试、WiFi 辅助脚本
 firmware/qca6174/         # 从本机 Android 提取的 QCA6174 board data
 docs/                     # 硬件、bring-up 计划、阶段记录；入口见 docs/README.md
@@ -110,10 +112,10 @@ HTTP 测速脚本（需要 host 运行 `scripts/x2-speed-server.py`）。
 
 ## 已知问题
 
-- **蓝牙 serdev**：`hci_uart`/`btqca` 能加载，`serial0-0` 也已生成，但
-  `hci_uart_register_device()` 失败，日志只有 `Bluetooth: serdev registration failed`；
-  还没进入 `qca_open`。下一步是打印 `hci_uart_register_device()` 的返回码，
-  或检查 `serdev-ttyport.c:ttyport_open()` 的 `tty->ops->open()`。
+- **蓝牙 UART 行冲突（待验证）**：QCA6174 的 `blsp1_uart2` 没有 serial alias，
+  和 debug console 的 `blsp2_uart2` 都落到 line 0；`serdev_device_open()` 返回
+  `-ENXIO`，`hci_uart_register_device()` 在 `qca_open` 之前失败。DTS 已增加
+  `serial1 = &blsp1_uart2` 让两者分行，需下次启动确认。
 - **常态启动**：仍依赖 `fastboot boot`，未写入 boot 分区。
 - **显示**：console 已点亮；GPU/freedreno 和桌面合成尚未做。
 - **外设**：音频、摄像头、传感器、指纹未完成。
@@ -123,4 +125,5 @@ HTTP 测速脚本（需要 host 运行 `scripts/x2-speed-server.py`）。
 刷机有风险。修改分区前先备份 `modemst1`、`modemst2`、`fsg`、`persist` 等
 不可再生数据。仓库中的 boot 镜像目前以内存加载验证为主，不要直接把未验收
 镜像写入 boot 分区。WiFi PSK 只保存在手机 rootfs 的
-`/etc/wpa_supplicant/wpa_supplicant-wlan0.conf`，不进入仓库。
+`/etc/wpa_supplicant/wpa_supplicant-wlan0.conf`，不进入仓库；SSH 的 root 密码也只
+保存在手机 rootfs 的 `/etc/shadow`，仓库里不放密钥或口令。
