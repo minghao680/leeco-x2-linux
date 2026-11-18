@@ -20,7 +20,7 @@ Debian 13 用户空间，并保留 Android 10 作为另一套可启动系统。
 
 当前阶段由 bootloader 的 `fastboot boot` 内存加载内核、DTB 和 initramfs：
 
-1. `fastboot boot out/boot-va39-debian-screen51-normal-pm.img`
+1. `fastboot boot out/boot-va39-debian-screen52-regload-only.img`
 2. initramfs 挂载 `/dev/sda9`，优先进入 `/data/debian/root`
 3. 目录根不可用时回退到 initramfs 内的 RAM rootfs
 4. USB NCM 提供 `192.168.42.1`，串口与 telnet 作为备用入口

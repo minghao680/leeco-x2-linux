@@ -124,7 +124,7 @@ adb 在线状态下读取 `/sys`、`/proc`、`dumpsys`，再与
 | 子系统                            | 主线现状                                              | 难度 |
 | ------------------------------ | ------------------------------------------------- | -- |
 | 显示 / 触摸 / 电量                   | 已可用（screen23 + `atmel_mxt_ts` + `qcom-battery`）   | 完成 |
-| 存储 UFS                         | 已可用（`ufshcd-qcom`，screen51 正常 PM 已通过冷启动与持续写验收）                   | 完成 |
+| 存储 UFS                         | 已可用（`ufshcd-qcom`，screen52 正常 PM 已通过冷启动与持续写验收）                   | 完成 |
 | 音频（WCD9335 + TFA9890）          | 未做；编解码器主线有 `wcd9335` 驱动，TFA9890 无主线驱动（只有 TFA9879） | 中  |
 | WiFi/BT（QCA6174）               | 未做；ath10k + hci\_qca + BDF / 固件                   | 中  |
 | 相机（IMX230 / OV8865）            | 未做；camss + 两个 sensor 驱动 + VFE/CSID                | 高  |

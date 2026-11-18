@@ -40,6 +40,10 @@ fi
 
 for p in "$REPO"/kernel/patches/*.patch; do
 	[ -e "$p" ] || continue
+	base=$(basename "$p")
+	case " $SKIP_PATCHES " in
+	*" $base "*) echo "== skip $base"; continue ;;
+	esac
 	echo "== $p"
 	git apply -v --ignore-whitespace "$p"
 done

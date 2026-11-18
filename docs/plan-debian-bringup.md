@@ -11,7 +11,7 @@
 | 用户空间 | Debian 13.7，`apt`/`bash` 可用，187 包 |
 | 远程 | SSH over NCM 已验证；USB ACM 串口（COM12）可用 |
 | 根 | **userdata 目录根** `/data/debian/root`（53G ext4；`rw`、journal recovery、实际写测均已验收） |
-| UFS | **0019 regulator DRMS 修复已验收**；screen51 正常 PM 通过两次冷启动及 Debian/Android/TWRP 三种热重启，持续写稳定，见 `docs/ufs-static-analysis.md` |
+| UFS | **0019 regulator DRMS 修复已验收，0015/0016 已经 A/B 删除**；screen52 最小补丁版通过两次真冷启动和 1 GiB 持续写，正常 PM 稳定，见 `docs/ufs-static-analysis.md` |
 | 屏幕 | **1440×2560 全屏 console 已点亮**（`screen23`，MDP5 双接口正统方案） |
 | 电量 | `qcom-battery` 可读 `capacity`（当前 16%） |
 | WiFi / BT | PCIe 关着；BT 节点在，缺固件 |
@@ -41,16 +41,16 @@
    当时用 `noload` 绕过；后续 PM A/B 已证明持续写/writeback 故障来自 UFS 电源路径，
    因而 `noload` 不再被视为永久硬要求。
 3. **当前稳定基线**：initramfs（`initramfs/init-debian-disk`）使用 `mount -o rw`，允许 ext4
-   journal replay。screen51 在正常 PM 下已完成两次真正冷启动和 Debian/Android/TWRP 三种热重启；
-   journal recovery、userdata `rw` 挂载及真实 rootfs 256 MiB 写测均通过。
+   journal replay。screen52 在正常 PM 下已通过两次真正冷启动和 1 GiB 持续写；
+   screen51 此前完成了 Debian/Android/TWRP 三种热重启。journal recovery、userdata `rw` 挂载及 256 MiB 写测均通过。
 4. **Android → Debian 的过渡**：Android 的“关机”可能不 unmount `/data`，superblock 会保留
    RECOVER 位；现由主线正常完成 journal replay，不再要求每次先去 TWRP 跑 `e2fsck`。
    若文件系统本身另有损坏，再按普通 ext4 维护流程处理。
 5. 旧基线验收：`screen26` 启动即磁盘根；重启一次后 marker/rootfs 均在；Android 数据无损
    （`e2fsck -fn` 报 37,152 files / 1,601,831 blocks，无错误）。
 
-**风险 / 注意**：旧 `noload` 基线会跳过 journal，已不再是当前流程。screen51 的 `rw`
-流程已通过实际 journal replay、写后 `sync` 和多次冷/热启动验收；不再需要把 TWRP `e2fsck`
+**风险 / 注意**：旧 `noload` 基线会跳过 journal，已不再是当前流程。screen52 的 `rw`
+流程已通过两次真冷启动、实际 journal replay 和写后 `sync`；三种热重启由 screen51 覆盖。不再需要把 TWRP `e2fsck`
 当作常规切换步骤。主线上没有 SELinux，写进去的文件没有 label，Android 只是看到一个
 不认识的目录。
 
@@ -161,5 +161,5 @@
 
 阶段 A 的最终形态是在 Android `/data` 里新增目录 `/data/debian/root`（不建镜像、不格式化、
 不动分区表），双系统共存保持不变。Debian 与 Android 不能同时挂载 `/data`；旧基线用
-`noload` 规避 UFS 写故障，当前 screen51 的 `rw` + journal replay 已验收。如果你想 `/data`
+`noload` 规避 UFS 写故障，当前 screen52 的 `rw` + journal replay 已验收。如果你想 `/data`
 保持一字节不动，只能退回“纯 RAM + 每次重来”，或等阶段 D 完成后走 OTG U 盘。

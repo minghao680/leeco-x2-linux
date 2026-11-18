@@ -11,17 +11,20 @@ x2 DTS 的 L20/L25/S4 原先缺少 `regulator-allow-set-load`，regulator core �
 
 这同时解释了故障特征：NOP 和 READ_DEVICE_DESC 等轻载操作可成功，而 `fDeviceInit` 的内部初始化和持续 NAND 写入进入高负载后掉链。trace 显示失败前 DME_LINKSTARTUP 与 NOP 均成功，SET_FLAG(fDeviceInit) 无响应；READ_DEVICE_DESC 能收到 `QUERY_RESP=0xF6 (NOT_READABLE)`，证明 QUERY 传输路径本身可用。
 
-**最终验收镜像：`out/boot-va39-debian-screen51-normal-pm.img`。**
+**最终最小验收镜像：`out/boot-va39-debian-screen52-regload-only.img`。**
 
-- 启用：DMA32、上游 v8 0015/0016、regulator 0019。
-- 禁用：0010 全关 PM、0012 完整校准、0013 E1、0014 common reset、0017 二次 startup、0018 QUERY 诊断。
-- 0019 是 screen47 冷启动失败到 screen50/51 成功的决定性变量；0015/0016 是否也是必要条件尚未单独删减 A/B，不宣称它们为本机必需。
+- 启用：`0006` DMA32 retry、`0019` regulator load。
+- 已删除：`0015` PHY 顺序补丁、`0016` dynamic gear 补丁。二者在源码上互相依赖：只应用 0015 会因残留 `goto out_disable_phy` 而编译失败；两者组合只是上游 v8 候选，不是本机必需。
+- 仍禁用：0010 全关 PM、0012 完整校准、0013 E1、0014 common reset、0017 二次 startup、0018 QUERY 诊断。
+- screen47 证明没有 0019 时 0015/0016 也不能修复冷启动；screen52 进一步证明去掉 0015/0016 后，0019 单独即可稳定冷启动和高负载写。
 
 | 前态 | 镜像 | 枚举 / 挂载 | 真实写验收 |
 |---|---|---|---|
 | 完全断电冷启动，第 1 次 | screen50，no-PM | 全分区；userdata `rw` | cache 累计 1.25 GiB，约 130–135 MiB/s |
 | 完全断电冷启动，第 1 次 | screen51，正常 PM | 全分区；journal recovery + `rw` | cache 1 GiB + idle 20 s 后再写 256 MiB；rootfs 另写 256 MiB |
 | 完全断电冷启动，第 2 次 | screen51，正常 PM | 全分区；userdata `rw` | cache 256 MiB |
+| 完全断电冷启动，第 1 次 | screen52，0019 only | 全分区；userdata `rw` | 256 MiB，119.2 MB/s |
+| 完全断电冷启动，第 2 次 | screen52，0019 only | 全分区；userdata `rw` | 256 MiB，139.3 MB/s；另 1 GiB 持续写 137.0 MB/s，Dirty/Writeback=0 |
 | Debian 热重启 | screen51，正常 PM | journal recovery + `rw` | cache 256 MiB |
 | Android 热重启 | screen51，正常 PM | userdata `rw` | cache 256 MiB |
 | TWRP 热重启 | screen51，正常 PM | userdata `rw` | cache 256 MiB |
