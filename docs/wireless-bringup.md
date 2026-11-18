@@ -220,6 +220,38 @@ PING 223.5.5.5: 2 packets transmitted, 2 received, 0% packet loss
 rtt min/avg/max/mdev = 15.121/19.610/24.100/4.489 ms
 ```
 
+## 吞吐与稳定性（2026-11-18）
+
+手机在 Debian initramfs 中连接已保存的 5GHz AP（5180 MHz、VHT80、2×2），
+host 用 HTTP/TCP 测速（`scripts/x2-speed-server.py`，端口 8000），手机用
+`curl` 拉 16 GiB 动态零流或 PUT 1 GiB 文件。选 HTTP 是因为本机 Windows
+iperf3 客户端报 `unable to create a new stream: Permission denied`，WSL 到
+手机又 `No route to host`；这是测试环境问题，不是内核网络栈问题。
+
+| 场景 | 结果 |
+|---|---:|
+| 单流下行 5 s | 188,276,064 B / 4.999 s = 37.7 MB/s ≈ 301 Mbit/s |
+| 四流下行 30 s | 6.08 + 8.64 + 11.82 + 9.20 = 35.75 MB/s ≈ 286 Mbit/s |
+| 四流上行 30 s | 10.22 + 8.84 + 9.89 + 9.90 = 38.85 MB/s ≈ 311 Mbit/s |
+| 5 min 连续下行 + 1 Hz ping | 11.23 GB / 300 s = 37.4 MB/s ≈ 299 Mbit/s；ping 300/300，0% 丢包，RTT avg 25.2 ms / max 44.3 ms |
+
+四流下行没有比单流更快，说明瓶颈在 WiFi 链路/AP 侧或 host 无线网卡，
+不是手机单条 TCP 流；四流上行略高。5 分钟窗口内 `dmesg` 记录到 2 次
+`Reason: 7=CLASS3_FRAME_FROM_NONASSOC_STA` deauth，均在约 0.1 s 内重新
+authenticate/associate 成功，ping 没有丢包。当前 `iw dev wlan0 get power_save`
+为 `on`；这两个重连可能是 AP 侧状态或省电时序，留作后续 A/B（关省电、
+换 `firmware-6`/`board-2`）。
+
+复现：
+
+```sh
+# host
+python3 scripts/x2-speed-server.py 8000
+# phone（rootfs 内）
+sh /tmp/x2-speed-test.sh dl     # N=4 SECS=30
+sh /tmp/x2-speed-test.sh up     # 需先准备 /tmp/up.bin
+```
+
 ## 蓝牙现场（2026-11-18）
 
 `hci_uart.ko`、`btqca.ko`、`bluetooth.ko` 都已加载，serdev 设备也已经生成：
@@ -246,7 +278,8 @@ Bluetooth: serdev registration failed
 ## 还没做
 
 - 开机自动加载 `ath10k`、自动连 WiFi、自动 DHCP（当前是手动跑脚本）。
-- WiFi 吞吐/长时间稳定性（`iperf3`、24 h）。
+- 24 h 长稳/iperf3 原始 TCP 对比；当前只有 5 min HTTP 持续下行 + ping。
 - 蓝牙：`hci_uart` + `btqca`，BT_EN 为 PM8994 GPIO19，固件文件已在 rootfs。
 - `firmware-6` + 正确的 `board-2` 是否能把速率/稳定性做得更好，留作 A/B。
+- `Reason 7` deauth 的 AP/省电时序 A/B（关 `power_save`、换 AP 信道）。
 - RTC 持久化/NTP，避免每次开机都回到 1970。

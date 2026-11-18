@@ -96,11 +96,14 @@ host 端用 HTTP/TCP 测速（应用层，单/四流，30 s）：
 
 | 方向 | 单流 | 四流合计 |
 |---|---:|---:|
-| 手机接收（host → phone） | 35.9 MB/s ≈ 287 Mbit/s | 35.7 MB/s ≈ 286 Mbit/s |
-| 手机发送（phone → host） | — | 38.0 MB/s ≈ 304 Mbit/s |
+| 手机接收（host → phone） | 37.7 MB/s ≈ 301 Mbit/s | 35.7 MB/s ≈ 286 Mbit/s |
+| 手机发送（phone → host） | — | 38.9 MB/s ≈ 311 Mbit/s |
 
 链路为 5180 MHz、VHT80 2×2；上面是应用层 HTTP 结果，不是 iperf3 原始
-TCP 上限，手机 CPU/存储和服务端 Python 都会占一部分开销。
+TCP 上限，手机 CPU/存储和服务端 Python 都会占一部分开销。5 分钟连续下行
+平均 37.4 MB/s（≈299 Mbit/s），同时 ping 网关 300/300、0% 丢包；dmesg
+记录到 2 次 `Reason 7` deauth 并自动重连成功。详见
+[docs/wireless-bringup.md](docs/wireless-bringup.md)。
 
 `scripts/x2-wifi-up.sh` 是 WiFi 拉起脚本；`scripts/x2-speed-test.sh` 是上面的
 HTTP 测速脚本（需要 host 运行 `scripts/x2-speed-server.py`）。
