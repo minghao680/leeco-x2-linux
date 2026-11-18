@@ -290,16 +290,61 @@ aliases {
 };
 ```
 
-这样 console 保持 `ttyMSM0`，蓝牙走 line 1。DTB 已重新编译并打进
-`out/boot-x2-debian-wifi-ssh-btline.img`，**尚未完成实机启动验证**；下次启动
-需要确认 `serial0-0` 是否出现、`qca_open` 是否执行、`/sys/class/bluetooth/hci0`
-是否生成。
+这样 console 保持 `ttyMSM0`，蓝牙走 line 1。真机启动后已确认：
+
+```text
+7570000.serial: ttyMSM1   # BT, line 1
+75b0000.serial: ttyMSM0   # console, line 0
+/sys/bus/serial/devices/serial0-0
+```
+
+`hci_uart` + `btqca` 加载后 `hci0` 出现，QCA 固件 setup 完成：
+
+```text
+QCA Product ID   :0x00000008
+QCA SOC Version  :0x00000044
+QCA ROM Version  :0x00000302
+QCA Patch Version:0x00000111
+QCA controller version 0x00440302
+QCA setup on UART is completed
+```
+
+下载 `rampatch_00440302.bin` 后会打印一条 `Frame reassembly failed (-84)`，但
+后续 NVM 下载、`hci0` 创建、`hciconfig up` 和 BlueZ 扫描都成功，当前按
+非致命告警记录，暂不做 H4 重传层改动。
+
+但控制器返回的 BD_ADDR 是全 0，`btqca` 会置 `HCI_QUIRK_USE_BDADDR_PROPERTY`，
+Linux 随后把设备标成 `HCI_UNCONFIGURED`，表现为 `DOWN RAW` 和
+`hciconfig hci0 up` 返回 `Operation not supported (95)`。修复是给蓝牙节点补一个
+本地管理地址（对称字节避免 endian 歧义）：
+
+```dts
+bluetooth {
+	compatible = "qcom,qca6174-bt";
+	enable-gpios = <&pm8994_gpios 19 GPIO_ACTIVE_HIGH>;
+	clocks = <&divclk4>;
+	local-bd-address = [ 02 00 00 00 00 02 ];
+};
+```
+
+真机验证：
+
+```text
+hci0: BD Address: 02:00:00:00:00:02  ACL MTU: 1024:7  SCO MTU: 60:8
+      UP RUNNING
+bluetoothctl list:
+Controller 02:00:00:00:00:02 BlueZ 5.82 [default]
+```
+
+`BlueZ 5.82` 扫描已能发现附近设备（美的空调、米家体重秤等），说明 HCI、
+L2CAP、SCO、LE 广播路径都已打通。生产 init 现在会自动加载 `bluetooth`/`btqca`/`hci_uart`、启动 `dbus-daemon --system` 和 `bluetoothd`，再 `hciconfig hci0 up`；当前验证镜像为 `out/boot-x2-debian-btlog.img`。
 
 ## 还没做
 
 - 24 h 长稳/iperf3 原始 TCP 对比；当前只有 5 min HTTP 持续下行 + ping。
-- 蓝牙：`hci_uart` + `btqca`，BT_EN 为 PM8994 GPIO19，固件文件已在 rootfs；
-  先验证上面的 serial1 修正，再处理 QCA 固件加载。
+- 蓝牙真实出厂 BD_ADDR：当前用 `02:00:00:00:00:02` 本地管理地址；后续可从
+  Android 的 NVM/persist 数据提取原始地址替换。
+- A2DP/HFP、BLE GATT 外设、配对/绑定持久化等上层功能还没逐项验收。
 - `firmware-6` + 正确的 `board-2` 是否能把速率/稳定性做得更好，留作 A/B。
 - `Reason 7` deauth 的 AP/省电时序 A/B（关 `power_save`、换 AP 信道）。
 - RTC 持久化/NTP，避免每次开机都回到 1970。

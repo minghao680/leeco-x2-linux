@@ -160,6 +160,44 @@ if [ -z "$ROOT" ]; then
 	echo "[init] RAM rootfs ready: $(busybox cat /newroot/etc/debian_version 2>/dev/null)"
 fi
 
+# ---- Persistent kernel log -------------------------------------------------
+# The reboot(2) path on this board can wedge before the kernel resets, so a
+# normal dmesg snapshot dies with the page cache.  Keep a line-buffered
+# /dev/kmsg follower on the userdata partition, and sync it periodically.
+# The log is deliberately outside the chroot so it also survives a broken root.
+kmsg_log_start() {
+	KLOG=/data/debian/logs/kmsg.log
+	busybox mkdir -p /data/debian/logs 2>/dev/null || return 0
+	# Keep one previous boot, capped at 8 MiB.
+	if [ -f "$KLOG" ]; then
+		size=$(busybox stat -c %s "$KLOG" 2>/dev/null || echo 0)
+		if [ "$size" -gt 8388608 ] 2>/dev/null; then
+			busybox mv -f "$KLOG" "$KLOG.1"
+		fi
+	fi
+	{
+		printf '\n===== x2 boot %s source=%s root=%s =====\n' \
+			"$(busybox date -u '+%Y-%m-%dT%H:%M:%SZ')" "$SRC" "$ROOT"
+		busybox dmesg
+	} >> "$KLOG" 2>/dev/null
+	# stdbuf is executed through chroot, but the shell opens the log fd first;
+	# therefore the child can write to /data even though it is chrooted.
+	busybox chroot "$ROOT" /usr/bin/stdbuf -oL /usr/bin/dmesg -w \
+		>> "$KLOG" 2>&1 &
+	(
+		while :; do
+			busybox sleep 5
+			busybox sync
+		done
+	) &
+	echo "[init] kmsg log: $KLOG"
+}
+if [ -x "$ROOT/usr/bin/dmesg" ] && [ -x "$ROOT/usr/bin/stdbuf" ]; then
+	kmsg_log_start
+else
+	echo "[init] dmesg/stdbuf missing; persistent kmsg log disabled"
+fi
+
 # ---- Pseudo filesystems inside the new root --------------------------------
 for d in proc sys dev dev/pts tmp run; do busybox mkdir -p $ROOT/$d; done
 printf 'x2\n' > "$ROOT/etc/hostname"
@@ -245,6 +283,52 @@ wifi_up() {
 	busybox chroot "$ROOT" /usr/sbin/ip -4 addr show wlan0 || true
 }
 wifi_up
+
+# ---- Bluetooth: QCA6174 -----------------------------------------------------
+# QCA6174 is a serdev device on blsp1_uart2.  The mainline kernel exposes it as
+# /sys/bus/serial/devices/serial0-0; hci_uart then creates hci0.  BlueZ needs
+# a system bus plus bluetoothd, otherwise bluetoothctl aborts with a D-Bus
+# assertion before it can even reach the controller.
+bluetooth_up() {
+	[ -x "$ROOT/usr/sbin/modprobe" ] || {
+		echo "[init] modprobe missing; Bluetooth disabled this boot"
+		return 0
+	}
+
+	busybox chroot "$ROOT" /usr/sbin/modprobe bluetooth 2>/dev/null || true
+	busybox chroot "$ROOT" /usr/sbin/modprobe btqca 2>/dev/null || true
+	busybox chroot "$ROOT" /usr/sbin/modprobe hci_uart 2>/dev/null || true
+
+	i=0
+	while [ ! -d /sys/class/bluetooth/hci0 ] && [ $i -lt 10 ]; do
+		busybox sleep 1
+		i=$((i+1))
+	done
+	if [ ! -d /sys/class/bluetooth/hci0 ]; then
+		echo "[init] hci0 did not appear; Bluetooth disabled this boot"
+		busybox dmesg | busybox grep -iE 'bluetooth|hci|qca|serdev' | busybox tail -n 20
+		return 0
+	fi
+
+	busybox mkdir -p "$ROOT/run/dbus" "$ROOT/var/log"
+	busybox rm -f "$ROOT/run/dbus/system_bus_socket"
+	if [ -x "$ROOT/usr/bin/dbus-daemon" ]; then
+		busybox chroot "$ROOT" /usr/bin/dbus-daemon --system --fork 2>/dev/null || true
+		busybox sleep 1
+	fi
+	if [ -x "$ROOT/usr/libexec/bluetooth/bluetoothd" ]; then
+		busybox chroot "$ROOT" /usr/libexec/bluetooth/bluetoothd -d \
+			>> "$ROOT/var/log/bluetoothd.log" 2>&1 &
+		busybox sleep 2
+	fi
+
+	busybox chroot "$ROOT" /usr/sbin/rfkill unblock bluetooth 2>/dev/null || true
+	busybox chroot "$ROOT" /usr/sbin/hciconfig hci0 up 2>/dev/null || true
+	busybox sleep 1
+	echo "[init] Bluetooth state:"
+	busybox chroot "$ROOT" /usr/sbin/hciconfig hci0 2>/dev/null || true
+}
+bluetooth_up
 
 # Keep the root password in /etc/shadow.  initramfs must not reset it on every
 # boot, otherwise password-auth SSH would silently stop working.

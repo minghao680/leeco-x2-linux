@@ -21,7 +21,7 @@ boot/system。
 | 输入 | Atmel maXTouch 触摸可用；按键映射待补 |
 | WiFi | QCA6174 5GHz/WPA2，开机自动连接、DHCP、外网、阿里云 apt；实测约 300 Mbit/s |
 | 远程登录 | `sshd` 开机自动启动，root 密码登录，监听 `0.0.0.0:22` |
-| 蓝牙 | QCA6174 驱动/固件；已定位为 UART line 冲突，DTB 修正待启动验证 |
+| 蓝牙 | QCA6174 已可用：`hci0` UP、BlueZ 5.82 可扫描；UART line 与 BD_ADDR 问题均已修正 |
 | Android | 与 Debian 共存，userdata 未重分区 |
 
 ## 快速入口
@@ -29,7 +29,7 @@ boot/system。
 当前阶段由 bootloader 的 `fastboot boot` 内存加载内核、DTB 和 initramfs：
 
 ```sh
-fastboot boot out/boot-x2-debian-wifi-ssh-btline.img
+fastboot boot out/boot-x2-debian-btlog.img
 ```
 
 启动后：
@@ -40,6 +40,9 @@ fastboot boot out/boot-x2-debian-wifi-ssh-btline.img
 4. `init-debian-disk` 自动加载 QCA6174、连接已保存的 WPA 网络、DHCP，并关闭
    `power_save`
 5. rootfs 中存在 `/usr/sbin/sshd` 时自动启动 SSH；root 密码登录，默认端口 22
+6. 自动加载 QCA6174 蓝牙模块、启动系统 D-Bus 与 `bluetoothd`，把 `hci0` 拉起
+7. 从 `/dev/kmsg` 持续记录内核日志到 `/data/debian/logs/kmsg.log`，用于定位
+   软重启挂起；日志按 8 MiB 轮转
 
 WiFi 不可用或没有 WPA 配置时，启动不会阻塞，USB NCM 仍然保留。手动重建
 WiFi 仍可使用 `scripts/x2-wifi-up.sh`。
@@ -112,10 +115,12 @@ HTTP 测速脚本（需要 host 运行 `scripts/x2-speed-server.py`）。
 
 ## 已知问题
 
-- **蓝牙 UART 行冲突（待验证）**：QCA6174 的 `blsp1_uart2` 没有 serial alias，
-  和 debug console 的 `blsp2_uart2` 都落到 line 0；`serdev_device_open()` 返回
-  `-ENXIO`，`hci_uart_register_device()` 在 `qca_open` 之前失败。DTS 已增加
-  `serial1 = &blsp1_uart2` 让两者分行，需下次启动确认。
+- **蓝牙**：QCA6174 的 `blsp1_uart2` 已通过 DTS `serial1` alias 与 debug console
+  分开；控制器返回全 0 BD_ADDR 时 Linux 会标记 `HCI_UNCONFIGURED`，当前用
+  `local-bd-address = [02 00 00 00 00 02]` 固定一个本地管理地址。真实出厂
+  BD_ADDR 仍可从 Android 的 NVM/persist 数据里提取后替换。
+- **软重启挂起（待修）**：`busybox reboot` 和直接 `reboot(2)` 都会让 USB NCM/ADB
+  掉线、UART 仍在但系统不响应，需要长按电源；已加持久 `kmsg` 日志用于定位。
 - **常态启动**：仍依赖 `fastboot boot`，未写入 boot 分区。
 - **显示**：console 已点亮；GPU/freedreno 和桌面合成尚未做。
 - **外设**：音频、摄像头、传感器、指纹未完成。

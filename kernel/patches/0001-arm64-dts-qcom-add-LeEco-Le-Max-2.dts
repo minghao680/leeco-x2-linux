@@ -424,6 +424,12 @@
 		enable-gpios = <&pm8994_gpios 19 GPIO_ACTIVE_HIGH>;
 
 		clocks = <&divclk4>;
+
+		/* QCA6174 returns an all-zero BD_ADDR unless its NVM image
+		 * supplied one; Linux then marks the controller unconfigured.
+		 * Use a locally administered address so hci0 can be brought up.
+		 * Symmetric bytes avoid the local-bd-address endian ambiguity. */
+		local-bd-address = [ 02 00 00 00 00 02 ];
 	};
 };
 
