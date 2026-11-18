@@ -41,8 +41,8 @@
    当时用 `noload` 绕过；后续 PM A/B 已证明持续写/writeback 故障来自 UFS 电源路径，
    因而 `noload` 不再被视为永久硬要求。
 3. **当前稳定基线**：initramfs（`initramfs/init-debian-disk`）使用 `mount -o rw`，允许 ext4
-   journal replay。screen52 在正常 PM 下已通过两次真正冷启动和 1 GiB 持续写；
-   screen51 此前完成了 Debian/Android/TWRP 三种热重启。journal recovery、userdata `rw` 挂载及 256 MiB 写测均通过。
+   journal replay。screen52 在正常 PM 下已通过两次真冷启动和 1 GiB 持续写；
+   并已完成 Debian/Android/TWRP 三种前态热重启及各自 256 MiB 写测。journal recovery、userdata `rw` 挂载均通过。
 4. **Android → Debian 的过渡**：Android 的“关机”可能不 unmount `/data`，superblock 会保留
    RECOVER 位；现由主线正常完成 journal replay，不再要求每次先去 TWRP 跑 `e2fsck`。
    若文件系统本身另有损坏，再按普通 ext4 维护流程处理。
@@ -50,7 +50,7 @@
    （`e2fsck -fn` 报 37,152 files / 1,601,831 blocks，无错误）。
 
 **风险 / 注意**：旧 `noload` 基线会跳过 journal，已不再是当前流程。screen52 的 `rw`
-流程已通过两次真冷启动、实际 journal replay 和写后 `sync`；三种热重启由 screen51 覆盖。不再需要把 TWRP `e2fsck`
+流程已通过两次真冷启动、Debian/Android/TWRP 三种前态热重启、journal replay 和写后 `sync`。不再需要把 TWRP `e2fsck`
 当作常规切换步骤。主线上没有 SELinux，写进去的文件没有 label，Android 只是看到一个
 不认识的目录。
 

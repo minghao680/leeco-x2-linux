@@ -25,9 +25,11 @@ x2 DTS 的 L20/L25/S4 原先缺少 `regulator-allow-set-load`，regulator core �
 | 完全断电冷启动，第 2 次 | screen51，正常 PM | 全分区；userdata `rw` | cache 256 MiB |
 | 完全断电冷启动，第 1 次 | screen52，0019 only | 全分区；userdata `rw` | 256 MiB，119.2 MB/s |
 | 完全断电冷启动，第 2 次 | screen52，0019 only | 全分区；userdata `rw` | 256 MiB，139.3 MB/s；另 1 GiB 持续写 137.0 MB/s，Dirty/Writeback=0 |
-| Debian 热重启 | screen51，正常 PM | journal recovery + `rw` | cache 256 MiB |
-| Android 热重启 | screen51，正常 PM | userdata `rw` | cache 256 MiB |
-| TWRP 热重启 | screen51，正常 PM | userdata `rw` | cache 256 MiB |
+| Debian 热重启 | screen52，0019 only | journal recovery + `rw` | 256 MiB，119.5 MB/s |
+| Android 热重启 | screen52，0019 only | userdata `rw` | 256 MiB，119.6 MB/s |
+| TWRP 热重启 | screen52，0019 only | userdata `rw` | 256 MiB，119.2 MB/s |
+
+screen51 在相同三种热重启前态下也曾通过 256 MiB 写测；screen52 的三种结果来自最小补丁版，且写后 `Dirty/Writeback` 均回到 0，无 UIC/OCS/EXT4 错误。
 
 以上写测均先满足 `test -b /dev/sda3` 或 `test -b /dev/sda9`，执行 `fsync/sync` 后无 `saved_uic_err`、DL replay、OCS invalid、EXT4 错误或块层卡死。RAM 中不存在块设备时禁止直接 `dd of=/dev/sdaN`，以免创建普通文件造成假通过。
 
