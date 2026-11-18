@@ -1,0 +1,41 @@
+diff --git a/drivers/ufs/host/ufs-qcom.c b/drivers/ufs/host/ufs-qcom.c
+--- a/drivers/ufs/host/ufs-qcom.c
++++ b/drivers/ufs/host/ufs-qcom.c
+@@ -490,6 +490,7 @@ static int ufs_qcom_power_up_sequence(struct ufs_hba *hba)
+ 	struct ufs_host_params *host_params = &host->host_params;
+ 	struct phy *phy = host->generic_phy;
+ 	enum phy_mode mode;
++	bool skip_phy_cycle;
+ 	int ret;
+ 
+ 	/*
+@@ -501,13 +502,16 @@ static int ufs_qcom_power_up_sequence(struct ufs_hba *hba)
+ 		host_params->hs_rate = PA_HS_MODE_A;
+ 
+ 	mode = host_params->hs_rate == PA_HS_MODE_B ? PHY_MODE_UFS_HS_B : PHY_MODE_UFS_HS_A;
++	skip_phy_cycle = of_device_is_compatible(hba->dev->of_node,
++						   "qcom,msm8996-ufshc") &&
++				 phy->power_count;
+ 
+ 	/* Reset UFS Host Controller and PHY */
+ 	ret = ufs_qcom_host_reset(hba);
+ 	if (ret)
+ 		return ret;
+ 
+-	if (phy->power_count)
++	if (phy->power_count && !skip_phy_cycle)
+ 		phy_power_off(phy);
+ 
+ 
+@@ -524,7 +528,10 @@ static int ufs_qcom_power_up_sequence(struct ufs_hba *hba)
+ 		goto out_disable_phy;
+ 
+ 	/* power on phy - start serdes and phy's power and clocks */
+-	ret = phy_power_on(phy);
++	if (!skip_phy_cycle)
++		ret = phy_power_on(phy);
++	else
++		ret = 0;
+ 	if (ret) {
+ 		dev_err(hba->dev, "%s: phy power on failed, ret = %d\n",
+ 			__func__, ret);

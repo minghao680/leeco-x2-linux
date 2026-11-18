@@ -41,7 +41,7 @@ fi
 for p in "$REPO"/kernel/patches/*.patch; do
 	[ -e "$p" ] || continue
 	echo "== $p"
-	git apply -v "$p"
+	git apply -v --ignore-whitespace "$p"
 done
 
 cp "$REPO/kernel/config-pmos-msm8996-va39.aarch64" .config
@@ -56,7 +56,9 @@ for opt in ARCH_QCOM DRM_MSM SCSI_UFS_QCOM PHY_QCOM_QMP_UFS \
 done
 scripts/config --file .config \
 	-e PSTORE -e PSTORE_RAM -e PSTORE_CONSOLE -e PSTORE_PMSG \
-	-e PSTORE_DEFLATE_COMPRESS -e PSTORE_DEFLATE_COMPRESS_DEFAULT
+	-e PSTORE_DEFLATE_COMPRESS -e PSTORE_DEFLATE_COMPRESS_DEFAULT \
+	-e DETECT_HUNG_TASK -e SOFTLOCKUP_DETECTOR -e LOCKUP_DETECTOR \
+	-e HARDLOCKUP_DETECTOR -e PERF_EVENTS
 scripts/config --file .config \
 	-e USB -e USB_DWC3 -e USB_DWC3_DUAL_ROLE -e USB_GADGET \
 	-e USB_CONFIGFS -e USB_CONFIGFS_SERIAL -e USB_CONFIGFS_ACM \

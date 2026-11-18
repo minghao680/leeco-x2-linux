@@ -1,0 +1,13 @@
+diff --git a/drivers/ufs/host/ufs-qcom.c b/drivers/ufs/host/ufs-qcom.c
+--- a/drivers/ufs/host/ufs-qcom.c
++++ b/drivers/ufs/host/ufs-qcom.c
+@@ -480,6 +480,9 @@ static u32 ufs_qcom_get_hs_gear(struct ufs_hba *hba)
+ 	if (host->hw_ver.major >= 0x4)
+ 		return UFS_QCOM_MAX_GEAR(ufshcd_readl(hba, REG_UFS_PARAM0));
+ 
++	if (of_device_is_compatible(hba->dev->of_node, "qcom,msm8996-ufshc"))
++		return UFS_HS_G2;
++
+ 	/* Default is HS-G3 */
+ 	return UFS_HS_G3;
+ }

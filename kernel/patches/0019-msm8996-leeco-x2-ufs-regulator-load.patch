@@ -1,0 +1,26 @@
+diff --git a/arch/arm64/boot/dts/qcom/msm8996-leeco-x2.dts b/arch/arm64/boot/dts/qcom/msm8996-leeco-x2.dts
+--- a/arch/arm64/boot/dts/qcom/msm8996-leeco-x2.dts
++++ b/arch/arm64/boot/dts/qcom/msm8996-leeco-x2.dts
+@@ -100,6 +100,7 @@
+ 			regulator-name = "vreg_s4a_1p8";
+ 			regulator-min-microvolt = <1800000>;
+ 			regulator-max-microvolt = <1800000>;
++			regulator-allow-set-load;
+ 			regulator-always-on;
+ 		};
+ 
+@@ -118,12 +119,14 @@
+ 			regulator-name = "vreg_l20a_2p95";
+ 			regulator-min-microvolt = <2950000>;
+ 			regulator-max-microvolt = <2950000>;
++			regulator-allow-set-load;
+ 		};
+ 
+ 		vreg_l25a_1p2: l25 {
+ 			regulator-name = "vreg_l25a_1p2";
+ 			regulator-min-microvolt = <1200000>;
+ 			regulator-max-microvolt = <1200000>;
++			regulator-allow-set-load;
+ 		};
+ 
+ 		vreg_l28a_0p925: l28 {

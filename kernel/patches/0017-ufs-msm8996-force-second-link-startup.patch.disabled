@@ -1,0 +1,19 @@
+diff --git a/drivers/ufs/core/ufshcd.c b/drivers/ufs/core/ufshcd.c
+--- a/drivers/ufs/core/ufshcd.c
++++ b/drivers/ufs/core/ufshcd.c
+@@ -5046,6 +5046,15 @@ static int ufshcd_link_startup(struct ufs_hba *hba)
+ 	int retries = DME_LINKSTARTUP_RETRIES;
+ 	bool link_startup_again = false;
+ 
++	/*
++	 * Diagnostic for MSM8996 cold boot: do not rely on the initial
++	 * UFS_ACTIVE_PWR_MODE assumption left by the bootloader.  The second
++	 * link startup is the core's existing mechanism for bringing a device
++	 * back to the active state.
++	 */
++	if (of_device_is_compatible(hba->dev->of_node, "qcom,msm8996-ufshc"))
++		link_startup_again = true;
++
+ 	/*
+ 	 * If UFS device isn't active then we will have to issue link startup
+ 	 * 2 times to make sure the device state move to active.

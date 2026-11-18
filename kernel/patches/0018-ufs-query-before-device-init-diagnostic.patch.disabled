@@ -1,0 +1,25 @@
+diff --git a/drivers/ufs/core/ufshcd.c b/drivers/ufs/core/ufshcd.c
+--- a/drivers/ufs/core/ufshcd.c
++++ b/drivers/ufs/core/ufshcd.c
+@@ -4785,6 +4785,21 @@ static int ufshcd_complete_dev_init(struct ufs_hba *hba)
+ 	int err;
+ 	bool flag_res = true;
+ 	ktime_t timeout;
++	u8 desc[QUERY_DESC_MAX_SIZE] = {};
++
++	/*
++	 * Pure diagnostic: determine whether QUERY works at all before the
++	 * failing SET_FLAG(fDeviceInit).  Stop immediately afterwards so no
++	 * block device is exposed and no persistent storage is mounted.
++	 */
++	err = ufshcd_read_desc_param(hba, QUERY_DESC_IDN_DEVICE, 0, 0,
++				     desc, QUERY_DESC_MAX_SIZE);
++	dev_err(hba->dev,
++		"MSM8996 QUERY diagnostic: READ_DEVICE_DESC err=%d len=%u type=%u\n",
++		err, desc[0], desc[1]);
++
++	if (of_device_is_compatible(hba->dev->of_node, "qcom,msm8996-ufshc"))
++		return -EIO;
+ 
+ 	err = ufshcd_query_flag_retry(hba, UPIU_QUERY_OPCODE_SET_FLAG,
+ 		QUERY_FLAG_IDN_FDEVICEINIT, 0, NULL);

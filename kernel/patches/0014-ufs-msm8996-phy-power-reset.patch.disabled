@@ -1,0 +1,39 @@
+diff --git a/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c b/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
+--- a/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
++++ b/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
+@@ -1115,6 +1115,8 @@ struct qmp_phy_cfg {
+ 
+ 	/* true, if PCS block has no separate SW_RESET register */
+ 	bool no_pcs_sw_reset;
++	/* true, if analog power collapse requires a common reset pulse */
++	bool power_collapse_reset;
+ };
+ 
+ struct qmp_ufs {
+@@ -1279,6 +1281,7 @@ static const struct qmp_phy_cfg msm8996_ufsphy_cfg = {
+ 	.regs			= ufsphy_v2_regs_layout,
+ 
+ 	.no_pcs_sw_reset	= true,
++	.power_collapse_reset	= true,
+ };
+ 
+ static const struct qmp_phy_cfg sa8775p_ufsphy_cfg = {
+@@ -1847,6 +1850,8 @@ static int qmp_ufs_power_on(struct phy *phy)
+ 		goto err_disable_regulators;
+ 
+ 	qphy_setbits(pcs, cfg->regs[QPHY_PCS_POWER_DOWN_CONTROL], SW_PWRDN);
++	if (cfg->power_collapse_reset)
++		qphy_clrbits(qmp->serdes, QSERDES_COM_SW_RESET, SW_RESET);
+ 	return 0;
+ 
+ err_disable_regulators:
+@@ -1895,6 +1900,9 @@ static int qmp_ufs_power_off(struct phy *phy)
+ {
+ 	struct qmp_ufs *qmp = phy_get_drvdata(phy);
+ 	const struct qmp_phy_cfg *cfg = qmp->cfg;
++
++	if (cfg->power_collapse_reset)
++		qphy_setbits(qmp->serdes, QSERDES_COM_SW_RESET, SW_RESET);
+ 
+ 	/* Put PHY into POWER DOWN state: active low */
+ 	qphy_clrbits(qmp->pcs, cfg->regs[QPHY_PCS_POWER_DOWN_CONTROL],

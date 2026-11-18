@@ -1,0 +1,20 @@
+diff --git a/drivers/ufs/core/ufshcd.c b/drivers/ufs/core/ufshcd.c
+index 604043a75..65deb09ab 100644
+--- a/drivers/ufs/core/ufshcd.c
++++ b/drivers/ufs/core/ufshcd.c
+@@ -10641,6 +10641,15 @@ EXPORT_SYMBOL_GPL(ufshcd_system_thaw);
+  */
+ static int ufshcd_set_dma_mask(struct ufs_hba *hba)
+ {
++	/*
++	 * msm8996's UFS controller wedges on descriptors/buffers placed above
++	 * 4 GiB: link startup and small transfers survive, but sustained
++	 * writes (fsync/dd) never complete and the task ends in D state.
++	 * Keep everything in the 32-bit window on that SoC.
++	 */
++	if (of_device_is_compatible(hba->dev->of_node, "qcom,msm8996-ufshc"))
++		return dma_set_mask_and_coherent(hba->dev, DMA_BIT_MASK(32));
++
+ 	if (hba->vops && hba->vops->set_dma_mask)
+ 		return hba->vops->set_dma_mask(hba);
+ 	if (hba->capabilities & MASK_64_ADDRESSING_SUPPORT) {

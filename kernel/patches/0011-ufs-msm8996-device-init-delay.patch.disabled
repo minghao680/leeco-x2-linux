@@ -1,0 +1,13 @@
+diff --git a/drivers/ufs/core/ufshcd.c b/drivers/ufs/core/ufshcd.c
+--- a/drivers/ufs/core/ufshcd.c
++++ b/drivers/ufs/core/ufshcd.c
+@@ -4785,6 +4785,9 @@ static int ufshcd_complete_dev_init(struct ufs_hba *hba)
+ 	bool flag_res = true;
+ 	ktime_t timeout;
+ 
++	if (of_device_is_compatible(hba->dev->of_node, "qcom,msm8996-ufshc"))
++		msleep(100);
++
+ 	err = ufshcd_query_flag_retry(hba, UPIU_QUERY_OPCODE_SET_FLAG,
+ 		QUERY_FLAG_IDN_FDEVICEINIT, 0, NULL);
+ 	if (err) {

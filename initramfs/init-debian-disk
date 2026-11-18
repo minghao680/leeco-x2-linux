@@ -2,9 +2,10 @@
 # x2 mainline initramfs -> Debian 13 on the userdata partition, USB networking.
 #
 # Boot order:
-#   1. mount /dev/sda9 (userdata, ext4) with -o noload
-#      (journal replay on this partition hangs in D state for minutes and
-#      kills the serial shell, so noload is mandatory)
+#   1. mount /dev/sda9 (userdata, ext4) read-write and let ext4 replay its
+#      journal. This is safe with the UFS power-management workaround: the
+#      old DL_TCx_REPLAY write hang was triggered by PM transitions, not by
+#      journal replay itself.
 #   2. if /data/debian/root looks like a Debian root, chroot into it
 #   3. otherwise fall back to the RAM rootfs (/rootfs.tar.xz in this image)
 #   4. if even that fails, drop to a rescue shell on ttyGS0/ttyMSM0
@@ -76,6 +77,12 @@ netup() {
 	EOF
 	busybox udhcpd -f /tmp/udhcpd.conf >/dev/null 2>&1 &
 	echo "[init] usb0 up, udhcpd serving 192.168.42.10-20"
+	# Second shell over NCM: survives a wedged ttyGS0/serial session.
+	busybox mkdir -p /dev/pts
+	busybox mount -t devpts devpts /dev/pts 2>/dev/null
+	[ -x /bin/sh ] || busybox ln -sf /bin/busybox /bin/sh 2>/dev/null
+	busybox telnetd -l /bin/sh -p 23 >/dev/null 2>&1 &
+	echo "[init] telnetd listening on 192.168.42.1:23"
 }
 i=0
 while ! netup && [ $i -lt 3 ]; do i=$((i+1)); busybox sleep 1; done
@@ -105,8 +112,8 @@ done
 echo "[init] waited ${i}s for /dev/sda9"
 
 if [ -b /dev/sda9 ]; then
-	if busybox mount -o rw,noload /dev/sda9 /data; then
-		echo "[init] /dev/sda9 mounted rw,noload on /data"
+	if busybox mount -o rw /dev/sda9 /data; then
+		echo "[init] /dev/sda9 mounted rw on /data (journal replay enabled)"
 		if [ -x /data/debian/root/usr/bin/bash ] && [ -f /data/debian/root/etc/debian_version ]; then
 			ROOT=/data/debian/root
 			SRC=userdata

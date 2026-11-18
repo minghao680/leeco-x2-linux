@@ -1,0 +1,38 @@
+diff --git a/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c b/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
+index 8a280433a..a63ccb7cd 100644
+--- a/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
++++ b/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
+@@ -135,7 +135,7 @@ static const struct qmp_phy_init_tbl msm8996_ufsphy_serdes[] = {
+ 
+ static const struct qmp_phy_init_tbl msm8996_ufsphy_tx[] = {
+ 	QMP_PHY_INIT_CFG(QSERDES_TX_HIGHZ_TRANSCEIVEREN_BIAS_DRVR_EN, 0x45),
+-	QMP_PHY_INIT_CFG(QSERDES_TX_LANE_MODE, 0x02),
++	QMP_PHY_INIT_CFG(QSERDES_TX_LANE_MODE, 0x06),
+ };
+ 
+ static const struct qmp_phy_init_tbl msm8996_ufsphy_rx[] = {
+@@ -152,6 +152,15 @@ static const struct qmp_phy_init_tbl msm8996_ufsphy_rx[] = {
+ 	QMP_PHY_INIT_CFG(QSERDES_RX_RX_EQU_ADAPTOR_CNTRL2, 0x0E),
+ };
+ 
++static const struct qmp_phy_init_tbl msm8996_ufsphy_pcs[] = {
++	QMP_PHY_INIT_CFG(QPHY_V2_PCS_UFS_RX_PWM_GEAR_BAND, 0x55),
++	QMP_PHY_INIT_CFG(QPHY_V2_PCS_UFS_RX_SIGDET_CTRL2, 0x6c),
++	QMP_PHY_INIT_CFG(QPHY_V2_PCS_UFS_TX_LARGE_AMP_DRV_LVL, 0x12),
++	QMP_PHY_INIT_CFG(QPHY_V2_PCS_UFS_TX_SMALL_AMP_DRV_LVL, 0x06),
++	QMP_PHY_INIT_CFG(QPHY_V2_PCS_UFS_RX_MIN_STALL_NOCONFIG_TIME_CAP, 0x28),
++	QMP_PHY_INIT_CFG(QPHY_V2_PCS_UFS_RX_SYM_RESYNC_CTRL, 0x03),
++};
++
+ static const struct qmp_phy_init_tbl sc7280_ufsphy_tx[] = {
+ 	QMP_PHY_INIT_CFG(QSERDES_V4_TX_PWM_GEAR_1_DIVIDER_BAND0_1, 0x06),
+ 	QMP_PHY_INIT_CFG(QSERDES_V4_TX_PWM_GEAR_2_DIVIDER_BAND0_1, 0x03),
+@@ -1271,6 +1280,8 @@ static const struct qmp_phy_cfg msm8996_ufsphy_cfg = {
+ 		.tx_num		= ARRAY_SIZE(msm8996_ufsphy_tx),
+ 		.rx		= msm8996_ufsphy_rx,
+ 		.rx_num		= ARRAY_SIZE(msm8996_ufsphy_rx),
++		.pcs		= msm8996_ufsphy_pcs,
++		.pcs_num	= ARRAY_SIZE(msm8996_ufsphy_pcs),
+ 	},
+ 
+ 	.vreg_list		= msm8996_ufsphy_vreg_l,

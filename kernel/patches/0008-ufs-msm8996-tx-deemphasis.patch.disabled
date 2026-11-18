@@ -1,0 +1,16 @@
+diff --git a/drivers/ufs/host/ufs-qcom.c b/drivers/ufs/host/ufs-qcom.c
+--- a/drivers/ufs/host/ufs-qcom.c
++++ b/drivers/ufs/host/ufs-qcom.c
+@@ -909,7 +909,11 @@ static void ufs_qcom_set_tx_hs_equalizer(struct ufs_hba *hba, u32 gear, u32 tx_l
+ 	int ret, i;
+ 
+ 	/* Determine the equalizer value based on the gear */
+-	equalizer_val = (gear == 5) ? DEEMPHASIS_3_5_dB : NO_DEEMPHASIS;
++	if (of_device_is_compatible(hba->dev->of_node, "qcom,msm8996-ufshc"))
++		equalizer_val = (gear >= 2) ? DEEMPHASIS_3_5_dB
++					    : NO_DEEMPHASIS;
++	else
++		equalizer_val = (gear == 5) ? DEEMPHASIS_3_5_dB : NO_DEEMPHASIS;
+ 
+ 	for (i = 0; i < tx_lanes; i++) {
+ 		ret = ufshcd_dme_set(hba, UIC_ARG_MIB_SEL(TX_HS_EQUALIZER, i),
