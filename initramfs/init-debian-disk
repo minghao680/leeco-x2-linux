@@ -311,9 +311,9 @@ bluetooth_up() {
 	fi
 
 	busybox mkdir -p "$ROOT/run/dbus" "$ROOT/var/log"
-	busybox rm -f "$ROOT/run/dbus/system_bus_socket"
-	if [ -x "$ROOT/usr/bin/dbus-daemon" ]; then
-		busybox chroot "$ROOT" /usr/bin/dbus-daemon --system --fork 2>/dev/null || true
+	busybox rm -f "$ROOT/run/dbus/pid" "$ROOT/run/dbus/system_bus_socket"
+	if [ -x "$ROOT/bin/dbus-daemon" ]; then
+		busybox chroot "$ROOT" /bin/dbus-daemon --system --fork 2>/dev/null || true
 		busybox sleep 1
 	fi
 	if [ -x "$ROOT/usr/libexec/bluetooth/bluetoothd" ]; then
@@ -322,11 +322,11 @@ bluetooth_up() {
 		busybox sleep 2
 	fi
 
-	busybox chroot "$ROOT" /usr/sbin/rfkill unblock bluetooth 2>/dev/null || true
-	busybox chroot "$ROOT" /usr/sbin/hciconfig hci0 up 2>/dev/null || true
+	busybox chroot "$ROOT" /sbin/rfkill unblock bluetooth 2>/dev/null || true
+	busybox chroot "$ROOT" /bin/hciconfig hci0 up 2>/dev/null || true
 	busybox sleep 1
 	echo "[init] Bluetooth state:"
-	busybox chroot "$ROOT" /usr/sbin/hciconfig hci0 2>/dev/null || true
+	busybox chroot "$ROOT" /bin/hciconfig hci0 2>/dev/null || true
 }
 bluetooth_up
 
