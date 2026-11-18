@@ -13,7 +13,7 @@ Debian 13 用户空间，并保留 Android 10 作为另一套可启动系统。
 | UFS | 已修复冷启动 `fDeviceInit` 与高负载持续写问题；两次冷启动、Debian/Android/TWRP 三种热重启均通过 |
 | 显示 | MDP5 双接口，1440×2560 全屏 console 已点亮 |
 | 输入 | Atmel maXTouch 触摸可用；按键映射待补 |
-| 网络 | USB NCM + SSH；USB ACM 串口可作为救援通道 |
+| 网络 | USB NCM + SSH；QCA6174 WiFi 已连通（WPA2 5GHz、DHCP、外网、阿里云 apt）；USB ACM 串口可作为救援通道 |
 | Android | 与 Debian 共存，userdata 未重分区 |
 
 ## 启动方式
@@ -61,6 +61,7 @@ out/local-build/msm8996-leeco-x2.dtb
 
 - `docs/plan-debian-bringup.md` — 当前路线与阶段状态
 - `docs/ufs-static-analysis.md` — UFS 冷启动和持续写问题的根因与验收矩阵
+- `docs/wireless-bringup.md` — QCA6174 WiFi 固件/board data/关联与 apt 验收
 - `docs/display-bringup-notes.md` — 双 DSI 面板与 MDP5 双接口点亮过程
 - `docs/mdp5-dual-intf-plan.md` — 全屏显示的正统实现方案
 - `docs/x2-hardware.md` / `docs/x2-sensors.md` — 整机与传感器硬件清单
@@ -71,7 +72,7 @@ out/local-build/msm8996-leeco-x2.dtb
 ## 待完成
 
 - 不依赖 fastboot / TWRP 的常态启动
-- WiFi / 蓝牙（QCA6174）
+- 蓝牙（QCA6174）
 - USB OTG 与按键映射
 - GPU / freedreno、音频、摄像头
 - 传感器（BMI160、AK09915、PA22A、霍尔）

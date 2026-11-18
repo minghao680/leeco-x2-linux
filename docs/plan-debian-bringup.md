@@ -14,7 +14,7 @@
 | UFS | **0019 regulator DRMS 修复已验收，0015/0016 已经 A/B 删除**；screen52 最小补丁版通过两次真冷启动和 1 GiB 持续写，正常 PM 稳定，见 `docs/ufs-static-analysis.md` |
 | 屏幕 | **1440×2560 全屏 console 已点亮**（`screen23`，MDP5 双接口正统方案） |
 | 电量 | `qcom-battery` 可读 `capacity`（当前 16%） |
-| WiFi / BT | PCIe 关着；BT 节点在，缺固件 |
+| WiFi / BT | **WiFi 已连通**：QCA6174 5GHz/WPA2、DHCP、外网、阿里云 apt；蓝牙待做 |
 | GPU | disabled，无硬件合成 |
 | 交互 | 触摸对（`atmel_mxt_ts`），按键未映射 |
 
@@ -90,11 +90,23 @@
 
 ## 阶段 E：WiFi / 蓝牙（P2）
 
-1. `pcie@608000`/`pcie@610000` + PHY 打开，确认 QCA6174 枚举到。
-2. `ath10k` + 板级 BDF（`board-2.bin` / `bus/pci/...`），从 Android `/vendor/firmware`
-   或 `/system/etc/firmware` 取对应文件。
-3. `hci_qca` + BT 固件（同源）。
-4. 验收：`iw` 能扫到 AP，`iperf3` 跑吞吐，和 NCM 的 4.6 MB/s 对比。
+**WiFi 状态：已完成（2026-11-18）**。详细记录见 `docs/wireless-bringup.md`。
+
+1. `pcie0@600000` + PHY 已启用，QCA6174 `0000:01:00.0` 枚举正常。
+2. board data **不是**通用 `board-2.bin`：本机 PCI subsystem 为 `0000:0000`，通用
+   `board-2.bin` 匹配不到；必须用 Android `modem.img` 里的 `image/bdwlan30.bin`
+   （8124 B，SHA256 `d8b3137b...`）作为 `board.bin` 和
+   `board-pci-0000:01:00.0.bin`。通用 board 会导致 TX 不出去、认证超时。
+3. 内核用 `firmware-4.bin`（API 4）稳定；`firmware-6.bin`（API 6）在启动
+   wpa_supplicant 尝试关联后机器重启回 Android，未留下 fw6 崩溃日志，当前重命名为
+   `firmware-6.bin.disabled`。
+4. `firmware_class` path 必须在加载前指向 rootfs firmware，且 `timeout=1`；
+   `timeout=0` 会无限等待 `firmware_fallback_sysfs`。`regulatory.db` 的绝对
+   alternatives 符号链接在 initramfs 下失效，需换成真实文件。
+5. 验收结果：`wlan0` 关联 `？？？5G`（5180 MHz，VHT80 2×2，-27 dBm），DHCP
+   `192.168.1.173/24`，`ping 223.5.5.5` 15–24 ms，阿里云三个 apt 源全部 `Hit`。
+6. 下一步：BT `hci_qca` + `btqca`（BT_EN 为 PM8994 GPIO19）；WiFi 自动连接、
+   `iperf3` 吞吐和 24 h 稳定性测试。
 
 ## 阶段 F：GPU 与媒体（P3）
 
