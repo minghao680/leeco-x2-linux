@@ -219,6 +219,21 @@
 };
 
 /*
+ * APSS hardware watchdog. The vendor 3.18 DTS exposes this at 0x9830000
+ * as "qcom,wdt"; mainline has no node, so PSCI reset is the only restart
+ * path and a failed PSCI reset leaves the SoC spinning in machine_restart().
+ */
+&soc {
+	watchdog@9830000 {
+		compatible = "qcom,kpss-wdt";
+		reg = <0x9830000 0x1000>;
+		interrupts = <0 28 0>, <0 29 0>;
+		clocks = <&sleep_clk>;
+		timeout-sec = <30>;
+	};
+};
+
+/*
  * Debug UART - invaluable when the display does not work yet.
  *
  * The x2 console is BLSP2_UART1 (uart8) on gpio4/5 = mainline blsp2_uart2

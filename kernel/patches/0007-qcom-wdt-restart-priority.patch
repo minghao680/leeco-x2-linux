@@ -1,0 +1,32 @@
+diff --git a/drivers/watchdog/qcom-wdt.c b/drivers/watchdog/qcom-wdt.c
+index dfaac5995..7ae5e6558 100644
+--- a/drivers/watchdog/qcom-wdt.c
++++ b/drivers/watchdog/qcom-wdt.c
+@@ -291,10 +291,25 @@ static int qcom_wdt_probe(struct platform_device *pdev)
+ 	 * to inform the WDT subsystem to ping the WDT
+ 	 */
+ 	if (qcom_wdt_is_running(&wdt->wdd)) {
+-		qcom_wdt_start(&wdt->wdd);
+-		set_bit(WDOG_HW_RUNNING, &wdt->wdd.status);
++		/*
++		 * Do not leave the bootloader watchdog running: this Debian
++		 * rootfs has no watchdog daemon, and a 30 s boot-time WDT
++		 * would reset the phone before we can test anything.  The
++		 * watchdog restart handler is still registered and will
++		 * explicitly start the WDT during reboot.
++		 */
++		qcom_wdt_stop(&wdt->wdd);
++		dev_info(dev, "stopped bootloader watchdog\n");
+ 	}
+ 
++	/*
++	 * PSCI's restart handler is priority 129. On this platform
++	 * SYSTEM_RESET can fail and leave machine_restart() spinning;
++	 * let the APSS watchdog preempt it so the SoC gets a real reset.
++	 */
++	if (data == &match_data_kpss)
++		watchdog_set_restart_priority(&wdt->wdd, 130);
++
+ 	ret = devm_watchdog_register_device(dev, &wdt->wdd);
+ 	if (ret)
+ 		return ret;

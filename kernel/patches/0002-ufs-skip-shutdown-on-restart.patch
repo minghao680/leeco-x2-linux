@@ -1,0 +1,17 @@
+diff --git a/drivers/ufs/core/ufshcd.c b/drivers/ufs/core/ufshcd.c
+index 604043a75..cd81f66f7 100644
+--- a/drivers/ufs/core/ufshcd.c
++++ b/drivers/ufs/core/ufshcd.c
+@@ -10533,6 +10533,12 @@ static void ufshcd_wl_shutdown(struct device *dev)
+ 	struct scsi_device *sdev = to_scsi_device(dev);
+ 	struct ufs_hba *hba = shost_priv(sdev->host);
+ 
++	dev_info(dev, "ufshcd_wl_shutdown: enter\n");
++	if (system_state == SYSTEM_RESTART) {
++		dev_info(dev, "ufshcd_wl_shutdown: skip on restart\n");
++		return;
++	}
++
+ 	down(&hba->host_sem);
+ 	hba->shutting_down = true;
+ 	up(&hba->host_sem);
