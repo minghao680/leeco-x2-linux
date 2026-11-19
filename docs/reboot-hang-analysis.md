@@ -45,11 +45,13 @@
 ## 实机验证
 
 - 候选镜像：`out/boot-x2-debian-wdt.img`（49,836,032 bytes）
-- 运行内核：`6.19.5-msm8996+ #53`
+- 运行内核：`6.19.5-msm8996+ #53`（第一版）；`#54`（edge-rising IRQ 版）
 - `/proc/device-tree/soc@0/watchdog@9830000` 存在
 - `/dev/watchdog0` 已注册；`/sys/class/watchdog/watchdog0` 存在
 - `CONFIG_QCOM_WDT=y`；`CONFIG_WATCHDOG_SYSFS` 未开，因此没有 `identity` 等属性，
   这不是 probe 失败
+- `#53` 的 GIC WARN 已由 `#54` 的 `interrupts = <0 28 1>, <0 29 1>` 清掉；
+  持久日志中 `#54` 两次启动均无 `irq-gic-v3.c:1629` 和 `qcom_wdt_probe` call trace。
 
 触发 `/tmp/x2-reboot-nosync` 后，设备正常回到 Android。持久 `kmsg.log` 在复位点
 直接结束：
@@ -68,8 +70,7 @@
 
 - DTS 里 `interrupts` 原为 `<0 28 0>, <0 29 0>`，mainline GIC 会打印
   `WARNING: ... irq-gic-v3.c:1629 at gic_irq_domain_translate`。已改为
-  `<0 28 1>, <0 29 1>`（`IRQ_TYPE_EDGE_RISING`），新镜像
-  `out/boot-x2-debian-wdt.img` 待启动验证；qcom-wdt 当前没有使用 pretimeout，
-  这项修改不影响 restart。
+  `<0 28 1>, <0 29 1>`（`IRQ_TYPE_EDGE_RISING`），`#54` 启动验证无该 WARN；
+  qcom-wdt 当前没有使用 pretimeout，这项修改不影响 restart。
 - `fastboot boot` 仍然是临时启动；重启后会回到正常 boot 分区（Android）。
 - 下一次要复测 Debian，需要重新 `fastboot boot out/boot-x2-debian-wdt.img`。
