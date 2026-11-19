@@ -1,12 +1,13 @@
 # x2 启动日志错误分诊
 
-基线：`6.19.5-msm8996+ #54`，latest boot 850 行。只列最近一次启动里实际出现的内容。
+基线：`6.19.5-msm8996+ #54`，latest boot 850 行；清理后 `#55` 为 667 行。
+只列最近一次启动里实际出现的内容。
 
-## 本次已处理
+## 已验证清理
 
 ### 1. arm-smmu 的 TLB sync timeout
 
-日志：
+`#54` 日志：
 
 ```text
 arm-smmu d00000.iommu: smmu-reset: 9 tlb sync
@@ -16,11 +17,11 @@ arm-smmu d00000.iommu: TLB sync timed out -- SMMU may be deadlocked
 这条是诊断补丁 `0002-arm-smmu-trace-reset.patch` 造成的：它在
 `arm_smmu_device_reset()` 的 TLBI 和 TLB sync 之间插入了多条 `dev_info()`，
 printk 延迟足以让 TLB sync 超时。该补丁已移到
-`kernel/patches/debug/`，不再进入生产构建。
+`kernel/patches/debug/`，不再进入生产构建。`#55` 启动日志已无该条。
 
 ### 2. WLED OVP IRQ unbalanced enable
 
-日志：
+`#54` 日志：
 
 ```text
 Unbalanced enable for IRQ 61
@@ -38,6 +39,8 @@ schedule `wled_ovp_work`，work 里再 `enable_irq()`，于是重复 enable。
 - work 只在 IRQ 未 enable 时才 enable；
 - module disable 时只在已 enable 时才 disable；
 - remove 时同样按状态处理。
+
+`#55` 启动日志已无该条。
 
 ## 仍然存在，但不是这次要修
 
@@ -59,5 +62,6 @@ schedule `wled_ovp_work`，work 里再 `enable_irq()`，于是重复 enable。
 ## 验证镜像
 
 - `out/boot-x2-debian-clean.img`
+- `#55`：无 SMMU TLB timeout、无 WLED unbalanced IRQ
 - 内含：watchdog restart 修复、WLED IRQ 状态修复、UFS restart shutdown 规避
 - 不包含：arm-smmu trace、wled debug 两个诊断补丁
