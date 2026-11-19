@@ -1,0 +1,18 @@
+diff --git a/drivers/firmware/psci/psci.c b/drivers/firmware/psci/psci.c
+index 38ca190d4..778d0c0c7 100644
+--- a/drivers/firmware/psci/psci.c
++++ b/drivers/firmware/psci/psci.c
+@@ -781,8 +781,11 @@ static int __init psci_1_0_init(const struct device_node *np)
+ 	if (psci_has_osi_support()) {
+ 		pr_info("OSI mode supported.\n");
+ 
+-		/* Default to PC mode. */
+-		psci_set_osi_mode(false);
++		/*
++		 * msm8996 firmware advertises OSI but rejects SET_SUSPEND_MODE
++		 * with -1. Keep the firmware default mode; PSCI CPU_SUSPEND still
++		 * works and cpuidle is functional without an explicit mode switch.
++		 */
+ 	}
+ 
+ 	return 0;

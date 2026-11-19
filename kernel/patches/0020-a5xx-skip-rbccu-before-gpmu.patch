@@ -1,0 +1,42 @@
+From: X2 bring-up <x2@local>
+Subject: [PATCH] drm/msm/a5xx: skip RBCCU bring-up before GPMU firmware init
+
+The A530/A540 RBCCU and SP power domains are controlled by the GPMU.
+On the first runtime resume, which runs before a5xx_hw_init() has had a
+chance to load and start the GPMU firmware, polling the RBCCU GDSC
+handshake times out and aborts the whole GPU bring-up. Keep the core
+rail/clock setup, but postpone the RBCCU/SP domain sequence until the
+GPMU firmware has been initialized.
+
+Signed-off-by: X2 bring-up <x2@local>
+---
+ drivers/gpu/drm/msm/adreno/a5xx_gpu.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+@@ -1353,5 +1353,6 @@ static int a5xx_pm_resume(struct msm_gpu *gpu)
+ {
+ 	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
++	struct a5xx_gpu *a5xx_gpu = to_a5xx_gpu(adreno_gpu);
+ 	int ret;
+ 
+ 	/* Turn on the core power */
+@@ -1370,6 +1371,16 @@ static int a5xx_pm_resume(struct msm_gpu *gpu)
+ 		return 0;
+ 	}
+ 
++	/*
++	 * The GPMU owns the RBCCU/SP power domain handshake. a5xx_hw_init()
++	 * loads and starts the GPMU only after the first runtime resume, so
++	 * polling RBCCU before that just times out and aborts the whole GPU
++	 * bring-up. Keep the core rail/clock on and let hw_init start the
++	 * GPMU first.
++	 */
++	if (!a5xx_gpu->gpmu_dwords)
++		return 0;
++
+ 	/* Turn the RBCCU domain first to limit the chances of voltage droop */
+ 	gpu_write(gpu, REG_A5XX_GPMU_RBCCU_POWER_CNTL, 0x778000);
+ 

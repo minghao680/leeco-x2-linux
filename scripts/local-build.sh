@@ -55,7 +55,8 @@ make olddefconfig >/dev/null
 # Same forced options as .github/workflows/kernel.yml: the seed config ships
 # DRM_MSM and USB_CONFIGFS as modules, which can never load without a rootfs.
 for opt in ARCH_QCOM DRM_MSM SCSI_UFS_QCOM PHY_QCOM_QMP_UFS \
-           TOUCHSCREEN_ATMEL_MXT PINCTRL_MSM8996 QCOM_TSENS ATH10K_PCI; do
+           TOUCHSCREEN_ATMEL_MXT PINCTRL_MSM8996 QCOM_TSENS ATH10K_PCI \
+           ARM_PSCI_CPUIDLE ARM_PSCI_CPUIDLE_DOMAIN; do
 	scripts/config --file .config -e "$opt"
 done
 scripts/config --file .config \

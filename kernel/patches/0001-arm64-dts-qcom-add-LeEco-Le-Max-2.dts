@@ -194,6 +194,16 @@
 	vccq2-max-microamp = <450000>;
 };
 
+/*
+ * CE1 BAM. The crypto engine uses pipes 6/7, and the BAM block itself is
+ * controlled by the secure firmware, so the Linux side only needs the channel
+ * map. msm8937/msm8998 use the same CE BAM topology (12 channels, 4 EEs).
+ */
+&cryptobam {
+	num-channels = <12>;
+	qcom,num-ees = <4>;
+};
+
 &ufsphy {
 	status = "okay";
 
@@ -251,6 +261,24 @@
 &pm8994_resin {
 	status = "okay";
 	linux,code = <KEY_VOLUMEDOWN>;
+};
+
+/*
+ * GPU supply: PMI8994 S2 is VDD_GFX. The MMCC GPU_GX_GDSC (and therefore
+ * the Adreno GX rail) is parented to this regulator on every other
+ * msm8996 board. Without it the GDSC comes up on a dummy supply and the
+ * first RBCCU/GPMU power-up can reset the whole PMIC.
+ */
+&pmi8994_spmi_regulators {
+	vdd_gfx: s2 {
+		regulator-name = "vdd-gfx";
+		regulator-min-microvolt = <980000>;
+		regulator-max-microvolt = <1230000>;
+	};
+};
+
+&mmcc {
+	vdd-gfx-supply = <&vdd_gfx>;
 };
 
 /*
@@ -439,6 +467,7 @@
 		enable-gpios = <&pm8994_gpios 19 GPIO_ACTIVE_HIGH>;
 
 		clocks = <&divclk4>;
+		max-speed = <1000000>;
 
 		/* QCA6174 returns an all-zero BD_ADDR unless its NVM image
 		 * supplied one; Linux then marks the controller unconfigured.
@@ -797,3 +826,11 @@
 	};
 };
 
+
+&gpu {
+	status = "okay";
+};
+
+&gpu_zap_shader {
+	firmware-name = "qcom/msm8996/leeco-x2/a530_zap.mdt";
+};
