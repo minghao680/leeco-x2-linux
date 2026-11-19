@@ -66,9 +66,10 @@
 
 ## 遗留
 
-- DTS 里 `interrupts` 第三个 cell 为 0，mainline GIC 会打印
-  `WARNING: ... irq-gic-v3.c:1629 at gic_irq_domain_translate`。qcom-wdt 当前没有
-  使用 pretimeout，注册和 restart 不受影响；后续可把中断类型改成
-  `IRQ_TYPE_LEVEL_HIGH` 或直接去掉 `interrupts` 清掉 WARN。
+- DTS 里 `interrupts` 原为 `<0 28 0>, <0 29 0>`，mainline GIC 会打印
+  `WARNING: ... irq-gic-v3.c:1629 at gic_irq_domain_translate`。已改为
+  `<0 28 1>, <0 29 1>`（`IRQ_TYPE_EDGE_RISING`），新镜像
+  `out/boot-x2-debian-wdt.img` 待启动验证；qcom-wdt 当前没有使用 pretimeout，
+  这项修改不影响 restart。
 - `fastboot boot` 仍然是临时启动；重启后会回到正常 boot 分区（Android）。
 - 下一次要复测 Debian，需要重新 `fastboot boot out/boot-x2-debian-wdt.img`。
