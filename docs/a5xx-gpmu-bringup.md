@@ -155,3 +155,11 @@ Hardware result (trace image, KDE loaded, no `x2-gpu-keepalive`):
 - Multiple suspend/resume cycles completed without SSH loss or reboot.
 - `/sys/bus/platform/devices/b00000.gpu/power/control` is `auto`.
 
+Long-run result: after leaving the GPU idle for about one minute and then
+touching the screen, the device reset again. `kmsg.log` ends at
+`A530 pm_suspend core suspended` with no following `pm_resume enter`, so
+the failure is on the wake path before `a5xx_pm_resume()` is entered (or
+before the log is flushed). `pstore` is empty. `0041` and `0042` are kept
+as `.disabled` patches until the wake path is fixed; the default build
+falls back to the pm1 runtime-resident behavior.
+
