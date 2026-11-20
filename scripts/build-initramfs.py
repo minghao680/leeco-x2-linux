@@ -79,7 +79,19 @@ def main():
                        devmajor=0, devminor=0, rdevmajor=0, rdevminor=0,
                        name="TRAILER!!!", data=b"")
 
+    def ensure_dir(name):
+        if not name or any(e["name"] == name for e in entries):
+            return
+        entries.append(dict(ino=0, mode=0o040755, uid=0, gid=0, nlink=2, mtime=0,
+                            devmajor=0, devminor=0, rdevmajor=0, rdevminor=0,
+                            name=name, data=b""))
+
     for idx, (name, path) in enumerate(extras):
+        parent = os.path.dirname(name)
+        cur = ""
+        for part in parent.split("/") if parent else []:
+            cur = f"{cur}/{part}" if cur else part
+            ensure_dir(cur)
         blob = open(path, "rb").read()
         entries.append(dict(ino=0x1000 + idx, mode=0o100644, uid=0, gid=0, nlink=1, mtime=0,
                             devmajor=0, devminor=0, rdevmajor=0, rdevminor=0,

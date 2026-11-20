@@ -34,7 +34,7 @@ diff --git a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c b/drivers/gpu/drm/msm/adreno/
 +	 * bring-up. Keep the core rail/clock on and let hw_init start the
 +	 * GPMU first.
 +	 */
-+	if (!a5xx_gpu->gpmu_dwords)
++	if (!a5xx_gpu->gpmu_ready)
 +		return 0;
 +
  	/* Turn the RBCCU domain first to limit the chances of voltage droop */

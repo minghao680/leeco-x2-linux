@@ -1,0 +1,28 @@
+diff --git a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+index 56eaff2ee..f254c5499 100644
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+@@ -563,6 +563,7 @@ static int a5xx_preempt_start(struct msm_gpu *gpu)
+ static void a5xx_ucode_check_version(struct a5xx_gpu *a5xx_gpu,
+ 		struct drm_gem_object *obj)
+ {
++	struct adreno_gpu *adreno_gpu = &a5xx_gpu->base;
+ 	u32 *buf = msm_gem_get_vaddr(obj);
+ 
+ 	if (IS_ERR(buf))
+@@ -572,8 +573,14 @@ static void a5xx_ucode_check_version(struct a5xx_gpu *a5xx_gpu,
+ 	 * If the lowest nibble is 0xa that is an indication that this microcode
+ 	 * has been patched. The actual version is in dword [3] but we only care
+ 	 * about the patchlevel which is the lowest nibble of dword [3]
++	 *
++	 * A530: the vendor PFP image advertises WHERE_AM_I, but on this
++	 * platform the CP never updates the shadow RPTR (the hardware
++	 * CP_RB_RPTR does advance to WPTR). Keep using the hardware RPTR
++	 * and drop preemption/4-ring setup until the shadow path is fixed.
+ 	 */
+-	if (((buf[0] & 0xf) == 0xa) && (buf[2] & 0xf) >= 1)
++	if (!adreno_is_a530(adreno_gpu) &&
++	    ((buf[0] & 0xf) == 0xa) && (buf[2] & 0xf) >= 1)
+ 		a5xx_gpu->has_whereami = true;
+ 
+ 	msm_gem_put_vaddr(obj);

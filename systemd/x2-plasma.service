@@ -1,0 +1,32 @@
+[Unit]
+Description=X2 KDE Plasma Wayland session on tty1
+After=systemd-user-sessions.service
+Before=getty@tty1.service
+Conflicts=getty@tty1.service x2-gnome.service x2-xfce.service
+
+[Service]
+Type=simple
+User=x2user
+Group=x2user
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+Environment=HOME=/home/x2user
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=XDG_SESSION_TYPE=wayland
+Environment=XDG_CURRENT_DESKTOP=KDE
+Environment=XDG_SESSION_DESKTOP=KDE
+Environment=XDG_SEAT=seat0
+Environment=XDG_VTNR=1
+Environment=QT_QPA_PLATFORM=wayland
+# disabled for A530 runtime-resident kernel test
+ExecStart=/usr/local/bin/x2-plasma-session
+Restart=no
+TimeoutStartSec=0
+
+[Install]
+WantedBy=graphical.target

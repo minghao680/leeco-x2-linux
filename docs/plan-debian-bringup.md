@@ -115,6 +115,21 @@
 2. 有了 GPU 才谈得上"接近安卓的流畅度"；之前所有界面合成都是软件光栅。
 3. 再往后是 venus 视频解码、camss 相机、modem 通话——工程量最大，最后碰。
 
+**2026-11-19 固件补齐**：Adreno 的 pm4/pfp/gpmu 与板级 zap、ADSP、SLPI、QCA BDF、
+TFA9890 已按两层打包（boot 内嵌 + rootfs stage），并修正 initramfs 的 firmware_class
+路径交接。system12 已构建，尚未实机验收；完整来源、缺口和部署方式见
+`docs/x2-firmware.md`。
+
+**2026-11-20 system13 GPU 结果**：`a530_pm4.fw`、`a530_pfp.fw`、`a530v3_gpmu.fw2`
+均已从 initramfs 加载，GPMU 文件缺失问题已排除；随后 `a5xx_me_init()` 的
+`CP_ME_INIT` 等待 CP 消费 ringbuffer 超时（`rptr/wptr = 0/C`），
+`adreno_load_gpu: gpu hw init failed: -22`。这与上游 2026-10 的 A5xx resume
+补丁描述一致：MSM8998/SDM660 等平台的 GX 电源域挂在 SMMU 上，GPU 可能仍带电，
+CP 保留旧 ringbuffer 读指针，而 `a5xx_hw_init()` 又把 ring 写指针重置到开头。
+已在 `a5xx_pm_resume()` 中、`msm_gpu_pm_resume()` 之后加入 RBBM 软复位
+（`kernel/patches/0024-a5xx-reset-on-pm-resume.patch`），并重建
+`out/boot-x2-debian-systemd14-reset.img`；待实机 fastboot boot 验证。
+
 ## 阶段 G：传感器（P2，2026-11-17 追加）
 
 **已查明的关键事实（2026-11-17，Android 实测）**：完整清单与 45 个 sensor 的逐条
@@ -126,12 +141,18 @@
 | 加速度计 / 陀螺仪 | **BMI160** | BOSCH | SSC 配置为 SPI：CS 0 / CS 1，中断 GPIO 117 / 119 |
 | 磁力计 | **AK09915**（不是 AK09918） | AKM | 同一条 SPI 总线，CS 1 |
 | 环境光 / 接近 | **PA22A** | TXC | I2C bus 3，地址 `0x23`；另有一路同总线 `0x1E` |
-| 霍尔（保护套） | BU52053NVX | ROHM | GPIO 124，无总线 |
+| 霍尔（保护套） | BU52061NVX | ROHM | GPIO 124，无总线 |
 
 厂商内核 `mokee_x2_defconfig` 里所有 `CONFIG_SENSORS_*`（BMI160/AKM/MPU 等）全是
 `# ... is not set`，设备树里也没有 sensor 节点；Android 侧 `hals.conf` → `sensors.ssc.so`，
 即 **Qualcomm Sensor Core（SSC / SLPI，跑在 ADSP 上）**。传感器由 ADSP 枚举，内核完全
-不知情。所以主线要自己当总线主控去读芯片。
+不知情。所以主线要自己当总线主控去读芯片。SLPI 的 `slpi.mdt/bNN` 已作为“未来 SSC
+路线”归档，但直接 IIO 方案不依赖它；这些传感器芯片本身没有独立固件。
+
+**2026-11-20 ADSP 现状**：主线加载 `qcom_q6v5_pas` 启动 ADSP 会直接锁死系统（CPU1
+hard LOCKUP，随后 RPM SMD / UFS `-110`），当前用
+`module_blacklist=qcom_q6v5_pas,qcom_q6v5_adsp` 绕过。证据、待查 DTS/PAS 资源和复现方法见
+[adsp-pas-hang.md](adsp-pas-hang.md)。直接 IIO 读传感器不依赖 ADSP，阶段 G 可先按原计划走。
 
 **步骤**：
 
@@ -157,6 +178,18 @@
 | 网络 | HTTP/TCP over NCM / WiFi | NCM 已 4.64 MB/s；WiFi 实测 301 Mbit/s 下行、311 Mbit/s 上行 |
 | 图形 | `glmark2` | 需阶段 F 完成后才有意义 |
 | 稳定性 | 24 h 连续跑 + 温度 | 不热降频死机，温度 < 45 °C |
+
+## 未来：迁移到 Debian 单系统（未执行）
+
+最终方向是放弃 Android，把 `boot`/`system`/`userdata` 全部交给 Debian；但外设和稳定性
+验收完成前不迁移。规划采用 **boot 作 LK 启动槽、userdata 作 Debian `/`、system 作 `/var`**，
+保留 `recovery` 做救援，`vendor`/`persist`/`modem` 的固件与校准先迁移不格式化。
+最终启动链是 LK → Android boot image（kernel + DTB + 极小 initramfs）→
+`root=PARTUUID=...` → systemd，不再用当前 chroot init。
+
+完整布局、迁移门槛、执行顺序和回滚方案见
+[plan-debian-only-migration.md](plan-debian-only-migration.md)。当前阶段仍按本文边界执行，
+不写 `boot`/`system`/`userdata`，不格式化任何分区。
 
 ## 边界（不做的事）
 

@@ -11,11 +11,13 @@
 | [mdp5-dual-intf-plan.md](mdp5-dual-intf-plan.md) | MDP5 双接口全屏方案（已实现） |
 | [x2-hardware.md](x2-hardware.md) | 整机硬件型号与总线 |
 | [x2-sensors.md](x2-sensors.md) | 45 个传感器逐条记录 |
+| [x2-firmware.md](x2-firmware.md) | 固件/本机持久资料缺口、两层打包与部署 |
 
 ## 后续阶段
 
 | 文档 | 内容 |
 |---|---|
+| [plan-debian-only-migration.md](plan-debian-only-migration.md) | 放弃 Android 后的最终分区布局、原生启动链、迁移门槛与回滚 |
 | [fingerprint-qbt1000-analysis.md](fingerprint-qbt1000-analysis.md) | QBT1000 指纹方案与 TrustZone/SSC 限制 |
 | [debian-peripherals-gap.md](debian-peripherals-gap.md) | 早期外设缺口快照；PCIe/BT 部分已过时，以 wireless/plan 为准 |
 

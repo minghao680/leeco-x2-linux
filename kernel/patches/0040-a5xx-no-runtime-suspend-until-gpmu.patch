@@ -1,0 +1,55 @@
+From: X2 bring-up <x2@local>
+Subject: [PATCH] drm/msm/a5xx: keep A530 runtime-resident until GPMU is ready
+
+The A530 runtime resume path hangs when the GPMU firmware has not
+initialized (gpmu_ready == false).  On the first runtime resume,
+a5xx_hw_init() runs before the GPMU-owned RBCCU/SP domains are usable,
+and the subsequent GPMU/RBCCU access can wedge the GPU.  Keep the GPU
+runtime-resident until the GPMU responds; devfreq can still scale the
+GPU, and the userspace x2-gpu-keepalive workaround is no longer needed.
+
+Signed-off-by: X2 bring-up <x2@local>
+---
+diff --git a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+@@ -5,6 +5,7 @@
+ #include <linux/kernel.h>
+ #include <linux/types.h>
+ #include <linux/cpumask.h>
++#include <linux/pm_runtime.h>
+ #include <linux/firmware/qcom/qcom_scm.h>
+ #include <linux/pm_opp.h>
+ #include <linux/nvmem-consumer.h>
+@@ -1024,6 +1025,14 @@
+ 	/* Last step - yield the ringbuffer */
+ 	a5xx_preempt_start(gpu);
+ 
++	/*
++	 * The GPMU owns the RBCCU/SP GDSC handshake.  Until the firmware
++	 * responds, runtime resume cannot safely run the GPMU/RBCCU path.
++	 * Keep the core rail and clocks on and let devfreq scale the GPU.
++	 */
++	if (adreno_is_a530(adreno_gpu) && !a5xx_gpu->gpmu_ready)
++		pm_runtime_forbid(&gpu->pdev->dev);
++
+ 	return 0;
+ }
+ 
+@@ -1437,6 +1446,16 @@
+ 	u32 mask = 0xf;
+ 	int i, ret;
+ 
++	/*
++	 * Defensive check for callers that bypass the runtime PM forbid:
++	 * never enter the A530 collapse path without a live GPMU.
++	 */
++	if (adreno_is_a530(adreno_gpu) && !a5xx_gpu->gpmu_ready) {
++		dev_info_once(gpu->dev->dev,
++			"A530 GPMU not ready; refusing runtime suspend");
++		return -EBUSY;
++	}
++
+ 	/* A505, A506, A508, A510 have 3 XIN ports in VBIF */
+ 	if (adreno_is_a505(adreno_gpu) || adreno_is_a506(adreno_gpu) ||
+ 	    adreno_is_a508(adreno_gpu) || adreno_is_a510(adreno_gpu))

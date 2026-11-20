@@ -1,0 +1,155 @@
+From: X2 bring-up <x2@local>
+Subject: [PATCH] drm/msm/a5xx: enable GDSCs immediately before GPMU
+
+Keep the first runtime resume away from RBCCU/SP. After zap and
+ME_INIT have completed, enable both domains with the vendor 100 us
+polling window before submitting GPMU instruction RAM writes.
+
+Signed-off-by: X2 bring-up <x2@local>
+---
+diff --git a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+@@ -1092,6 +1092,14 @@
+ 	if (!adreno_idle(gpu, ring))
+ 		return false;
+ 
++	/* Diagnostic: before GPMU is ready, require the CP ring to drain first. */
++	if ((adreno_is_a530(adreno_gpu) || adreno_is_a540(adreno_gpu)) &&
++	    !a5xx_gpu->gpmu_ready) {
++		DRM_INFO_ONCE("%s: waiting only for CP ring drain before GPMU is ready (status=%08x)\n",
++			gpu->name, gpu_read(gpu, REG_A5XX_RBBM_STATUS));
++		return true;
++	}
++
+ 	if (spin_until(_a5xx_check_idle(gpu))) {
+ 		DRM_ERROR("%s: %ps: timeout waiting for GPU to idle: status %8.8X irq %8.8X rptr/wptr %d/%d\n",
+ 			gpu->name, __builtin_return_address(0),
+diff --git a/drivers/gpu/drm/msm/adreno/a5xx_gpu.h b/drivers/gpu/drm/msm/adreno/a5xx_gpu.h
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.h
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.h
+@@ -24,6 +24,7 @@
+ 	struct drm_gem_object *gpmu_bo;
+ 	uint64_t gpmu_iova;
+ 	uint32_t gpmu_dwords;
++	bool gpmu_ready;
+ 
+ 	uint32_t lm_leakage;
+ 
+diff --git a/drivers/gpu/drm/msm/adreno/a5xx_power.c b/drivers/gpu/drm/msm/adreno/a5xx_power.c
+--- a/drivers/gpu/drm/msm/adreno/a5xx_power.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_power.c
+@@ -216,12 +216,51 @@
+ 	gpu_write(gpu, REG_A5XX_GPMU_PWR_COL_STAGGER_DELAY, 0x600040);
+ }
+ 
++/* Enable RBCCU/SP after secure init but immediately before GPMU RAM access. */
++static int a5xx_gpmu_enable_power_domains(struct msm_gpu *gpu)
++{
++	int ret;
++	u32 clk;
++
++	gpu_write(gpu, REG_A5XX_GPMU_RBCCU_POWER_CNTL, 0x778000);
++	udelay(3);
++	ret = spin_usecs(gpu, 100, REG_A5XX_GPMU_RBCCU_PWR_CLK_STATUS,
++		(1 << 20), (1 << 20));
++	if (ret) {
++		DRM_ERROR("%s: pre-GPMU RBCCU enable timeout: %08x\n", gpu->name,
++			gpu_read(gpu, REG_A5XX_GPMU_RBCCU_PWR_CLK_STATUS));
++		return ret;
++	}
++
++	gpu_write(gpu, REG_A5XX_GPMU_SP_POWER_CNTL, 0x778000);
++	ret = spin_usecs(gpu, 100, REG_A5XX_GPMU_SP_PWR_CLK_STATUS,
++		(1 << 20), (1 << 20));
++	if (ret)
++		DRM_ERROR("%s: pre-GPMU SP enable timeout: %08x\n", gpu->name,
++			gpu_read(gpu, REG_A5XX_GPMU_SP_PWR_CLK_STATUS));
++
++	/* Vendor gates and then re-enables the GPMU IP clock here. */
++	clk = gpu_read(gpu, REG_A5XX_GPMU_GPMU_SP_CLOCK_CONTROL);
++	DRM_ERROR("%s: pre-GPMU IP clock before=%08x\n", gpu->name, clk);
++	gpu_write(gpu, REG_A5XX_GPMU_GPMU_SP_CLOCK_CONTROL, clk & ~0x1);
++	udelay(3);
++	gpu_write(gpu, REG_A5XX_GPMU_GPMU_SP_CLOCK_CONTROL, clk | 0x1);
++	udelay(3);
++	DRM_ERROR("%s: pre-GPMU IP clock after=%08x RBBM_CLOCK_CNTL=%08x\n", gpu->name,
++		gpu_read(gpu, REG_A5XX_GPMU_GPMU_SP_CLOCK_CONTROL),
++		gpu_read(gpu, REG_A5XX_RBBM_CLOCK_CNTL));
++	return ret;
++}
++
+ /* Enable the GPMU microcontroller */
+ static int a5xx_gpmu_init(struct msm_gpu *gpu)
+ {
+ 	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
+ 	struct a5xx_gpu *a5xx_gpu = to_a5xx_gpu(adreno_gpu);
+ 	struct msm_ringbuffer *ring = gpu->rb[0];
++	u32 reg;
++
++	a5xx_gpu->gpmu_ready = false;
+ 
+ 	if (!a5xx_gpu->gpmu_dwords)
+ 		return 0;
+@@ -254,14 +293,24 @@
+ 	/* Kick off the GPMU */
+ 	gpu_write(gpu, REG_A5XX_GPMU_CM3_SYSRESET, 0x0);
+ 
+-	/*
+-	 * Wait for the GPMU to respond. It isn't fatal if it doesn't, we just
+-	 * won't have advanced power collapse.
+-	 */
+-	if (spin_usecs(gpu, 25, REG_A5XX_GPMU_GENERAL_0, 0xFFFFFFFF,
+-		0xBABEFACE))
+-		DRM_ERROR("%s: GPMU firmware initialization timed out\n",
+-			gpu->name);
++	/* Vendor GPMU_FW_INIT_RETRY is about 5 ms; keep the box reachable. */
++	DRM_ERROR("%s: GPMU kick sysreset=%08x wfi=%08x clk=%08x\n",
++		gpu->name, gpu_read(gpu, REG_A5XX_GPMU_CM3_SYSRESET),
++		gpu_read(gpu, REG_A5XX_GPMU_WFI_CONFIG),
++		gpu_read(gpu, REG_A5XX_GPMU_GPMU_SP_CLOCK_CONTROL));
++	if (spin_usecs(gpu, 5000, REG_A5XX_GPMU_GENERAL_0, 0xFFFFFFFF,
++		0xBABEFACE)) {
++		DRM_ERROR("%s: GPMU firmware initialization timed out: GENERAL_0=%08x\n",
++			gpu->name, gpu_read(gpu, REG_A5XX_GPMU_GENERAL_0));
++	} else {
++		a5xx_gpu->gpmu_ready = true;
++	}
++	reg = gpu_read(gpu, REG_A5XX_GPMU_RBBM_INTR_INFO);
++	DRM_ERROR("%s: GPMU state sysreset=%08x intr=%08x GENERAL_1=%08x RBBM_STATUS3=%08x CP_HW_FAULT=%08x\n",
++		gpu->name, gpu_read(gpu, REG_A5XX_GPMU_CM3_SYSRESET), reg,
++		gpu_read(gpu, REG_A5XX_GPMU_GENERAL_1),
++		gpu_read(gpu, REG_A5XX_RBBM_STATUS3),
++		gpu_read(gpu, REG_A5XX_CP_HW_FAULT));
+ 
+ 	if (!adreno_is_a530(adreno_gpu)) {
+ 		u32 val = gpu_read(gpu, REG_A5XX_GPMU_GENERAL_1);
+@@ -295,6 +344,7 @@
+ int a5xx_power_init(struct msm_gpu *gpu)
+ {
+ 	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
++	struct a5xx_gpu *a5xx_gpu = to_a5xx_gpu(adreno_gpu);
+ 	int ret;
+ 
+ 	/* Not all A5xx chips have a GPMU */
+@@ -310,8 +360,20 @@
+ 	/* Set up SP/TP power collapse */
+ 	a5xx_pc_init(gpu);
+ 
++	/* Power the RAM/graphics domains only after zap and ME_INIT completed. */
++	ret = a5xx_gpmu_enable_power_domains(gpu);
++	DRM_ERROR("%s: pre-GPMU domains ret=%d RBCCU=%08x SP=%08x\n", gpu->name, ret,
++		gpu_read(gpu, REG_A5XX_GPMU_RBCCU_PWR_CLK_STATUS),
++		gpu_read(gpu, REG_A5XX_GPMU_SP_PWR_CLK_STATUS));
++	if (ret)
++		return ret;
++
+ 	/* Start the GPMU */
+ 	ret = a5xx_gpmu_init(gpu);
++	DRM_ERROR("%s: gpmu_init ret=%d ready=%d GENERAL_0=%08x RBBM_STATUS=%08x\n",
++		gpu->name, ret, a5xx_gpu->gpmu_ready,
++		gpu_read(gpu, REG_A5XX_GPMU_GENERAL_0),
++		gpu_read(gpu, REG_A5XX_RBBM_STATUS));
+ 	if (ret)
+ 		return ret;
+ 

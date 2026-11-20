@@ -1,0 +1,43 @@
+From: X2 bring-up <x2@local>
+Subject: [PATCH] drm/msm/a5xx: reset GPU at the start of hw_init
+
+The bootloader can leave the GPU powered and its CP running before the
+kernel takes over. On this platform the GX power domain is tied to the
+SMMU, so runtime resume may not switch it off. In that case
+a5xx_hw_init() rewinds the ringbuffer and writes CP_ME_INIT at offset 0
+while the CP still holds its old read pointer, and the first
+CP_ME_INIT wait times out with rptr/wptr = 0/C.
+
+Reset RBBM unconditionally at the start of a5xx_hw_init() so the CP and
+all GPU blocks start from a known state regardless of whether the
+runtime resume callback ran.
+
+Signed-off-by: X2 bring-up <x2@local>
+---
+ drivers/gpu/drm/msm/adreno/a5xx_gpu.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+@@ -696,9 +696,20 @@ static int a5xx_hw_init(struct msm_gpu *gpu)
+ {
+ 	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
+ 	struct a5xx_gpu *a5xx_gpu = to_a5xx_gpu(adreno_gpu);
+ 	u32 hbb;
+ 	int ret;
+ 
++	/*
++	 * The GPU may still be powered and running from the bootloader, or
++	 * GX may follow the SMMU power domain. Reset RBBM here rather than
++	 * only in pm_resume(), because pm_runtime_get_sync() does not
++	 * necessarily invoke the runtime resume callback when the device is
++	 * already marked active.
++	 */
++	gpu_write(gpu, REG_A5XX_RBBM_SW_RESET_CMD, 1);
++	gpu_read(gpu, REG_A5XX_RBBM_SW_RESET_CMD);
++	gpu_write(gpu, REG_A5XX_RBBM_SW_RESET_CMD, 0);
++
+ 	gpu_write(gpu, REG_A5XX_VBIF_ROUND_ROBIN_QOS_ARB, 0x00000003);
+ 
+ 	if (adreno_is_a509(adreno_gpu) || adreno_is_a512(adreno_gpu) ||

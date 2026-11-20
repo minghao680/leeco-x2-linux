@@ -1,0 +1,242 @@
+--- a/drivers/power/supply/qcom-smbchg.c
++++ b/drivers/power/supply/qcom-smbchg.c
+@@ -20,6 +20,7 @@
+ #include <linux/slab.h>
+ #include <linux/reboot.h>
+ #include <linux/regulator/driver.h>
++#include <linux/workqueue.h>
+ #include <linux/unaligned.h>
+ #include <linux/util_macros.h>
+ #include <soc/qcom/pmic-sec-write.h>
+@@ -112,6 +113,132 @@
+ 		return POWER_SUPPLY_USB_TYPE_CDP;
+ 	else
+ 		return POWER_SUPPLY_USB_TYPE_UNKNOWN;
++}
++
++static bool smbchg_hvdcp_is_present(struct smbchg_chip *chip, u32 *sts)
++{
++	u32 reg;
++	int ret;
++
++	ret = regmap_read(chip->regmap,
++			  chip->base + SMBCHG_USB_CHGPTH_USBIN_HVDCP_STS,
++			  &reg);
++	if (ret) {
++		dev_err(chip->dev, "Failed to read HVDCP status: %pe\n",
++			ERR_PTR(ret));
++		return false;
++	}
++
++	*sts = reg;
++	dev_info(chip->dev, "HVDCP_STS=0x%02x\n", reg);
++	return !!(reg & USBIN_HVDCP_SEL_BIT);
++}
++
++static int __maybe_unused smbchg_force_9v_hvdcp(struct smbchg_chip *chip)
++{
++	int ret;
++
++	ret = qcom_pmic_sec_masked_write(chip->regmap,
++			chip->base + SMBCHG_USB_CHGPTH_CFG,
++			HVDCP_ADAPTER_SEL_MASK, HVDCP_5V);
++	if (ret) {
++		dev_err(chip->dev, "Failed to select HVDCP 5V: %pe\n",
++			ERR_PTR(ret));
++		return ret;
++	}
++
++	ret = regmap_update_bits(chip->regmap,
++			chip->base + SMBCHG_USB_CHGPTH_CMD_HVDCP_1,
++			FORCE_HVDCP_2P0, FORCE_HVDCP_2P0);
++	if (ret) {
++		dev_err(chip->dev, "Failed to assert FORCE_HVDCP_2P0: %pe\n",
++			ERR_PTR(ret));
++		return ret;
++	}
++
++	ret = regmap_update_bits(chip->regmap,
++			chip->base + SMBCHG_USB_CHGPTH_CMD_HVDCP_1,
++			FORCE_HVDCP_2P0, 0);
++	if (ret) {
++		dev_err(chip->dev, "Failed to deassert FORCE_HVDCP_2P0: %pe\n",
++			ERR_PTR(ret));
++		return ret;
++	}
++
++	msleep(500);
++
++	ret = qcom_pmic_sec_masked_write(chip->regmap,
++			chip->base + SMBCHG_USB_CHGPTH_CFG,
++			HVDCP_ADAPTER_SEL_MASK, HVDCP_9V);
++	if (ret) {
++		dev_err(chip->dev, "Failed to select HVDCP 9V: %pe\n",
++			ERR_PTR(ret));
++		return ret;
++	}
++
++	return 0;
++}
++
++static void smbchg_hvdcp_det_work(struct work_struct *work)
++{
++	struct smbchg_chip *chip =
++		container_of(work, struct smbchg_chip, hvdcp_det_work.work);
++	u32 input_sts;
++	u32 hvdcp_sts = 0;
++	bool present = false;
++	int i, ret;
++
++	if (!smbchg_usb_is_present(chip))
++		return;
++
++	for (i = 0; i < 5; i++) {
++		present = smbchg_hvdcp_is_present(chip, &hvdcp_sts);
++		if (present)
++			break;
++		if (i < 4)
++			msleep(200);
++	}
++
++	if (!present) {
++		u32 cfg, idev, input;
++
++		regmap_read(chip->regmap,
++			    chip->base + SMBCHG_USB_CHGPTH_CFG, &cfg);
++		regmap_read(chip->regmap,
++			    chip->base + SMBCHG_MISC_IDEV_STS, &idev);
++		regmap_read(chip->regmap,
++			    chip->base + SMBCHG_USB_CHGPTH_INPUT_STS, &input);
++		dev_info(chip->dev,
++			 "HVDCP debug: CFG=0x%02x IDEV=0x%02x INPUT=0x%02x\n",
++			 cfg, idev, input);
++		dev_info(chip->dev, "HVDCP absent; leaving charger alone\n");
++		dev_info(chip->dev, "HVDCP not detected; staying DCP\n");
++		return;
++	}
++
++	dev_info(chip->dev, "HVDCP detected; checking 9V state\n");
++	if (hvdcp_sts & USBIN_HVDCP_SEL_9V_BIT) {
++		dev_info(chip->dev, "HVDCP already at 9V; leaving as-is\n");
++		return;
++	}
++
++	dev_info(chip->dev, "HVDCP detected; selecting 9V\n");
++	ret = qcom_pmic_sec_masked_write(chip->regmap,
++			chip->base + SMBCHG_USB_CHGPTH_CFG,
++			HVDCP_ADAPTER_SEL_MASK, HVDCP_9V);
++	if (ret) {
++		dev_err(chip->dev, "Failed to select HVDCP 9V: %pe\n",
++			ERR_PTR(ret));
++		return;
++	}
++
++	ret = regmap_read(chip->regmap,
++			  chip->base + SMBCHG_USB_CHGPTH_INPUT_STS,
++			  &input_sts);
++	if (!ret)
++		dev_info(chip->dev,
++			 "QC2 select done: INPUT_STS=0x%02x (USBIN_9V=%d)\n",
++			 input_sts, !!(input_sts & USBIN_9V));
+ }
+ 
+ /**
+@@ -968,6 +1073,12 @@
+ 			return IRQ_NONE;
+ 		}
+ 	}
++
++	if (usb_present)
++		mod_delayed_work(system_wq, &chip->hvdcp_det_work,
++				 msecs_to_jiffies(2500));
++	else
++		cancel_delayed_work(&chip->hvdcp_det_work);
+ 
+ 	smbchg_extcon_update(chip);
+ 	power_supply_changed(chip->usb_psy);
+@@ -1485,6 +1596,26 @@
+ 		return ret;
+ 	}
+ 
++	/* Enable HVDCP detection so QC2/QC3 chargers can handshake */
++	ret = qcom_pmic_sec_masked_write(chip->regmap,
++					 chip->base + SMBCHG_USB_CHGPTH_CFG,
++					 HVDCP_EN_BIT, HVDCP_EN_BIT);
++	if (ret) {
++		dev_err(chip->dev, "Failed to enable HVDCP: %pe\n",
++			ERR_PTR(ret));
++		return ret;
++	}
++
++	/* Android also selects 9V at init; needed for QC2/QC3 detection */
++	ret = qcom_pmic_sec_masked_write(chip->regmap,
++					 chip->base + SMBCHG_USB_CHGPTH_CFG,
++					 HVDCP_ADAPTER_SEL_MASK, HVDCP_9V);
++	if (ret) {
++		dev_err(chip->dev, "Failed to select HVDCP 9V: %pe\n",
++			ERR_PTR(ret));
++		return ret;
++	}
++
+ 	/*
+ 	 * Call the USB source detect handler once to set USB current limit
+ 	 * and enable the charge path if USB is present.
+@@ -1522,6 +1643,7 @@
+ 
+ 	spin_lock_init(&chip->sec_access_lock);
+ 	INIT_WORK(&chip->otg_reset_work, smbchg_otg_reset_worker);
++	INIT_DELAYED_WORK(&chip->hvdcp_det_work, smbchg_hvdcp_det_work);
+ 
+ 	/* Initialize OTG regulator */
+ 	chip->otg_rdesc.id = -1;
+@@ -1632,6 +1754,7 @@
+ {
+ 	struct smbchg_chip *chip = platform_get_drvdata(pdev);
+ 
++	cancel_delayed_work_sync(&chip->hvdcp_det_work);
+ 	smbchg_usb_enable(chip, false);
+ 	smbchg_charging_enable(chip, false);
+ }
+--- a/drivers/power/supply/qcom-smbchg.h
++++ b/drivers/power/supply/qcom-smbchg.h
+@@ -130,14 +130,23 @@
+ /* USB_CHGPTH_CFG bits */
+ #define USB51AC_CTRL			BIT(1)
+ #define USB51_COMMAND_POL		BIT(2)
++#define HVDCP_EN_BIT			BIT(3)
++#define HVDCP_ADAPTER_SEL_MASK		GENMASK(5, 4)
+ #define CFG_USB3P0_SEL_BIT		BIT(7)
+ 
+ /* USB_CHGPTH_RT_STS bits */
+ #define USBIN_OV_BIT			BIT(1)
+ #define USBIN_SRC_DET_BIT		BIT(2)
+ 
++/* USB_CHGPTH_USBIN_HVDCP_STS bits */
++#define USBIN_HVDCP_SEL_BIT		BIT(4)
++#define USBIN_HVDCP_SEL_9V_BIT		BIT(1)
++
+ /* USB_CHGPTH_RID_STS bits */
+ #define RID_MASK			GENMASK(3, 0)
++
++/* USB_CHGPTH_CMD_HVDCP_1 bits */
++#define FORCE_HVDCP_2P0			BIT(3)
+ 
+ /* USB_CHGPTH_CMD_IL bits */
+ #define USBIN_MODE_HC_BIT		BIT(0)
+@@ -207,6 +216,8 @@
+ #define USB51AC_COMMAND1_100		BIT(2)
+ #define USB_2P0_SEL			0
+ #define USB_3P0_SEL			BIT(7)
++#define HVDCP_5V			0
++#define HVDCP_9V			BIT(4)
+ 
+ /* MISC_IDEV_STS values */
+ #define USB_TYPE_SDP_BIT		BIT(4)
+@@ -249,6 +260,7 @@
+ 
+ 	spinlock_t sec_access_lock;
+ 	struct work_struct otg_reset_work;
++	struct delayed_work hvdcp_det_work;
+ 
+ 	const struct smbchg_data *data;
+ };

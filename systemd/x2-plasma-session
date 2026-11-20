@@ -1,0 +1,17 @@
+#!/bin/sh
+# x2 KDE Plasma Wayland session, started by x2-plasma.service on tty1.
+export HOME=/home/x2user
+export USER=x2user
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1000}"
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=KDE
+export XDG_SESSION_DESKTOP=KDE
+export XDG_SEAT=seat0
+export XDG_VTNR=1
+export QT_QPA_PLATFORM=wayland
+export KDE_FULL_SESSION=true
+
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
+
+exec dbus-run-session -- /usr/bin/startplasma-wayland

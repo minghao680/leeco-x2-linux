@@ -1,0 +1,439 @@
+#!/bin/sh
+# x2 mainline initramfs -> Debian 13 on the userdata partition, USB networking.
+#
+# Boot order:
+#   1. mount /dev/sda9 (userdata, ext4) read-write and let ext4 replay its
+#      journal. This is safe with the UFS power-management workaround: the
+#      old DL_TCx_REPLAY write hang was triggered by PM transitions, not by
+#      journal replay itself.
+#   2. if /data/debian/root looks like a Debian root, chroot into it
+#   3. otherwise fall back to the RAM rootfs (/rootfs.tar.xz in this image)
+#   4. if even that fails, drop to a rescue shell on ttyGS0/ttyMSM0
+#
+# Gadget layout (one configuration, two functions):
+#   acm.usb0 -> /dev/ttyGS0, the rescue console
+#   ncm.usb0 -> usb0, 192.168.42.1/24, busybox udhcpd hands out .10-.20
+
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+busybox mount -t proc  none /proc  2>/dev/null
+busybox mount -t sysfs none /sys   2>/dev/null
+busybox mount -t devtmpfs none /dev 2>/dev/null || busybox mdev -s
+busybox mkdir -p /sys/kernel/config 2>/dev/null
+busybox mount -t configfs none /sys/kernel/config 2>/dev/null
+
+echo
+echo "=== x2 mainline -> Debian 13 (userdata root + NCM) ==="
+busybox cat /proc/version
+
+# ---- USB gadget: ACM console + NCM network -----------------------------------
+G=/sys/kernel/config/usb_gadget/g1
+busybox mkdir -p "$G" 2>/dev/null
+(
+cd "$G" || exit 0
+echo 0x0525 > idVendor
+echo 0xa4a7 > idProduct
+echo 0x0100 > bcdDevice
+echo 0x0200 > bcdUSB
+busybox mkdir -p strings/0x409
+echo "leeco"     > strings/0x409/manufacturer
+echo "x2"        > strings/0x409/product
+echo "x2debian"  > strings/0x409/serialnumber
+busybox mkdir -p configs/c.1/strings/0x409
+echo "acm+ncm"   > configs/c.1/strings/0x409/configuration
+
+busybox mkdir -p functions/acm.usb0
+busybox mkdir -p functions/ncm.usb0
+# Set the netdev name before binding; configfs refuses changes after UDC bind.
+echo usb0 > functions/ncm.usb0/ifname 2>/dev/null
+busybox ln -s functions/acm.usb0 configs/c.1/ 2>/dev/null
+busybox ln -s functions/ncm.usb0 configs/c.1/ 2>/dev/null
+
+UDC=$(busybox ls /sys/class/udc 2>/dev/null | busybox head -1)
+if [ -n "$UDC" ]; then echo "$UDC" > UDC && echo "[init] gadget bound to $UDC"; fi
+)
+
+i=0
+while [ ! -c /dev/ttyGS0 ] && [ $i -lt 25 ]; do busybox sleep 1; i=$((i+1)); done
+echo "[init] waited ${i}s for /dev/ttyGS0"
+
+# Do NOT redirect init's stdout to ttyGS0 here.  With only a charger attached
+# there is no USB host to drain the ACM endpoint, and writes to ttyGS0 block
+# the whole init script.  tty0 remains the boot console; USB shells are started
+# later, after the system is already up.
+
+# ---- Bring the USB netdev up ------------------------------------------------
+netup() {
+	[ -d /sys/class/net/usb0 ] || return 1
+	busybox ip link set usb0 up
+	busybox ip addr add 192.168.42.1/24 dev usb0 2>/dev/null
+	busybox cat > /tmp/udhcpd.conf <<-EOF
+	start 192.168.42.10
+	end 192.168.42.20
+	interface usb0
+	opt router 192.168.42.1
+	opt dns 192.168.42.1
+	opt subnet 255.255.255.0
+	EOF
+	busybox udhcpd -f /tmp/udhcpd.conf >/dev/null 2>&1 &
+	echo "[init] usb0 up, udhcpd serving 192.168.42.10-20"
+	# Second shell over NCM: survives a wedged ttyGS0/serial session.
+	busybox mkdir -p /dev/pts
+	busybox mount -t devpts devpts /dev/pts 2>/dev/null
+	[ -x /bin/sh ] || busybox ln -sf /bin/busybox /bin/sh 2>/dev/null
+	busybox telnetd -l /bin/sh -p 23 >/dev/null 2>&1 &
+	echo "[init] telnetd listening on 192.168.42.1:23"
+}
+i=0
+while ! netup && [ $i -lt 3 ]; do i=$((i+1)); busybox sleep 1; done
+
+# ---- Rescue shell (initramfs) ----------------------------------------------
+rescue() {
+	echo "[init] entering RESCUE initramfs shell on ttyGS0 / ttyMSM0"
+	for c in /dev/ttyGS0 /dev/ttyMSM0; do
+		[ -c "$c" ] || continue
+		busybox setsid sh -c 'busybox stty sane 2>/dev/null; while :; do sh -i; done' \
+			<"$c" >"$c" 2>&1 &
+	done
+	while :; do busybox sleep 1; done
+}
+
+# ---- Root selection: userdata first, RAM rootfs as fallback ------------------
+ROOT=
+SRC=unknown
+busybox mkdir -p /data 2>/dev/null
+
+# UFS probes asynchronously; /dev/sda9 may not exist yet when PID1 starts.
+i=0
+while [ ! -b /dev/sda9 ] && [ $i -lt 20 ]; do
+	busybox sleep 1
+	i=$((i+1))
+done
+echo "[init] waited ${i}s for /dev/sda9"
+
+if [ -b /dev/sda9 ]; then
+	if busybox mount -o rw /dev/sda9 /data; then
+		echo "[init] /dev/sda9 mounted rw on /data (journal replay enabled)"
+		if [ -x /data/debian/root/usr/bin/bash ] && [ -f /data/debian/root/etc/debian_version ]; then
+			ROOT=/data/debian/root
+			SRC=userdata
+			echo "[init] disk root OK: $(busybox cat $ROOT/etc/debian_version)"
+		else
+			echo "[init] /data/debian/root incomplete -> RAM fallback"
+		fi
+	elif busybox mount -o ro,noload /dev/sda9 /data; then
+		echo "[init] WARNING: journal dirty, mounted read-only."
+		echo "[init] boot Android once and power it off cleanly, then retry."
+		echo "[init] /data/debian/root incomplete -> RAM fallback"
+	else
+		echo "[init] /dev/sda9 mount FAILED -> RAM fallback"
+	fi
+else
+	echo "[init] no /dev/sda9 -> RAM fallback"
+fi
+
+if [ -z "$ROOT" ]; then
+	busybox mkdir -p /newroot
+	if ! busybox mount -t tmpfs -o size=1600M tmpfs /newroot 2>/dev/null; then
+		busybox mount -t tmpfs tmpfs /newroot || { echo "[init] tmpfs failed"; rescue; }
+	fi
+	if [ ! -f /rootfs.tar.xz ]; then
+		echo "[init] FATAL: /rootfs.tar.xz missing"
+		rescue
+	fi
+	echo "[init] unpacking Debian rootfs into RAM, please wait..."
+	( busybox xz -dc /rootfs.tar.xz | busybox tar -xf - -C /newroot ) &
+	pid=$!
+	while kill -0 $pid 2>/dev/null; do
+		echo -n "."
+		busybox sleep 5
+	done
+	wait $pid
+	rc=$?
+	echo
+	if [ $rc -ne 0 ] || [ ! -x /newroot/usr/bin/bash ]; then
+		echo "[init] unpack failed rc=$rc"
+		rescue
+	fi
+	ROOT=/newroot
+	SRC=ram
+	echo "[init] RAM rootfs ready: $(busybox cat /newroot/etc/debian_version 2>/dev/null)"
+fi
+
+# Expose the persistent root's firmware tree to every driver for the rest of
+# this boot. firmware_class path is a global kernel setting: without it, udev
+# autoloads ADSP/touch/etc after systemd starts but the kernel keeps looking in
+# the initramfs and reports -ENOENT even though the files exist in the rootfs.
+# The built-in Adreno driver probes before init, so GPU firmware must still be
+# embedded in the initramfs itself.
+if [ -d "$ROOT/lib/firmware" ] && [ -w /sys/module/firmware_class/parameters/path ]; then
+	printf '%s' "$ROOT/lib/firmware" > /sys/module/firmware_class/parameters/path
+	[ -w /sys/class/firmware/timeout ] && echo 1 > /sys/class/firmware/timeout
+	echo "[init] firmware path: $ROOT/lib/firmware"
+else
+	echo "[init] WARNING: firmware path not set (root/lib/firmware missing)"
+fi
+
+# ---- Persistent kernel log -------------------------------------------------
+# The reboot(2) path on this board can wedge before the kernel resets, so a
+# normal dmesg snapshot dies with the page cache.  Keep a line-buffered
+# /dev/kmsg follower on the userdata partition, and sync it periodically.
+# The log is deliberately outside the chroot so it also survives a broken root.
+kmsg_log_start() {
+	KLOG=/data/debian/logs/kmsg.log
+	busybox mkdir -p /data/debian/logs 2>/dev/null || return 0
+	# Keep one previous boot, capped at 8 MiB.
+	if [ -f "$KLOG" ]; then
+		size=$(busybox stat -c %s "$KLOG" 2>/dev/null || echo 0)
+		if [ "$size" -gt 8388608 ] 2>/dev/null; then
+			busybox mv -f "$KLOG" "$KLOG.1"
+		fi
+	fi
+	{
+		printf '\n===== x2 boot %s source=%s root=%s =====\n' \
+			"$(busybox date -u '+%Y-%m-%dT%H:%M:%SZ')" "$SRC" "$ROOT"
+		busybox dmesg
+	} >> "$KLOG" 2>/dev/null
+	# stdbuf is executed through chroot, but the shell opens the log fd first;
+	# therefore the child can write to /data even though it is chrooted.
+	busybox chroot "$ROOT" /usr/bin/stdbuf -oL /usr/bin/dmesg -w \
+		>> "$KLOG" 2>&1 &
+	(
+		while :; do
+			busybox sleep 5
+			busybox sync
+		done
+	) &
+	echo "[init] kmsg log: $KLOG"
+}
+if [ -x "$ROOT/usr/bin/dmesg" ] && [ -x "$ROOT/usr/bin/stdbuf" ]; then
+	kmsg_log_start
+else
+	echo "[init] dmesg/stdbuf missing; persistent kmsg log disabled"
+fi
+
+# ---- Pseudo filesystems inside the new root --------------------------------
+for d in proc sys dev dev/pts tmp run; do busybox mkdir -p $ROOT/$d; done
+printf 'x2\n' > "$ROOT/etc/hostname"
+busybox mount --bind /dev  $ROOT/dev  2>/dev/null
+busybox mount --bind /proc $ROOT/proc 2>/dev/null
+busybox mount --bind /sys  $ROOT/sys  2>/dev/null
+busybox mount -t devpts devpts $ROOT/dev/pts 2>/dev/null
+
+# Give the chroot a working network: hand it usb0 and a resolver stub.
+if [ -d /sys/class/net/usb0 ]; then
+	busybox mkdir -p $ROOT/etc
+	busybox rm -f $ROOT/etc/resolv.conf
+	echo "nameserver 192.168.42.1" > $ROOT/etc/resolv.conf
+fi
+
+# ---- WiFi: always on --------------------------------------------------------
+# This is the single production init.  There is no separate "with WiFi" image:
+# every boot tries QCA6174 first, and falls back to usb0/NCM only if the radio
+# or the saved WPA profile is unavailable.  wpa_supplicant and dhcpcd stay
+# resident, exactly like a normal Linux network service.
+wifi_up() {
+	[ -x "$ROOT/usr/sbin/wpa_supplicant" ] || {
+		echo "[init] wpa_supplicant missing; leaving usb0 only"
+		return 0
+	}
+	[ -f "$ROOT/etc/wpa_supplicant/wpa_supplicant-wlan0.conf" ] || {
+		echo "[init] no wpa_supplicant-wlan0.conf; leaving usb0 only"
+		return 0
+	}
+
+	[ -w /sys/module/firmware_class/parameters/path ] && \
+		printf '%s' "$ROOT/lib/firmware" > /sys/module/firmware_class/parameters/path
+	[ -w /sys/class/firmware/timeout ] && echo 1 > /sys/class/firmware/timeout
+
+	busybox chroot "$ROOT" /usr/sbin/modprobe cfg80211 2>/dev/null || true
+	busybox chroot "$ROOT" /usr/sbin/modprobe ath10k_pci 2>/dev/null || true
+
+	i=0
+	while [ ! -d /sys/class/net/wlan0 ] && [ $i -lt 20 ]; do
+		busybox sleep 1
+		i=$((i+1))
+	done
+	if [ ! -d /sys/class/net/wlan0 ]; then
+		echo "[init] wlan0 did not appear; WiFi disabled this boot"
+		busybox dmesg | busybox grep -i ath10k | busybox tail -n 10
+		return 0
+	fi
+
+	busybox chroot "$ROOT" /usr/sbin/rfkill unblock all 2>/dev/null || true
+	busybox chroot "$ROOT" /usr/sbin/iw reg set CN 2>/dev/null || true
+	busybox chroot "$ROOT" /usr/sbin/ip link set wlan0 up
+	busybox killall wpa_supplicant 2>/dev/null || true
+	busybox sleep 1
+	busybox chroot "$ROOT" /usr/sbin/wpa_supplicant -B -D nl80211 -i wlan0 \
+		-c /etc/wpa_supplicant/wpa_supplicant-wlan0.conf \
+		-P /run/wpa_supplicant-wlan0.pid
+
+	i=0
+	while [ $i -lt 20 ]; do
+		if busybox chroot "$ROOT" /usr/sbin/iw dev wlan0 link 2>/dev/null | \
+			busybox grep -q 'Connected'; then
+			break
+		fi
+		busybox sleep 1
+		i=$((i+1))
+	done
+
+	# Keep the radio out of 802.11 power save: the x2 is used as a desk
+	# Linux box and the extra latency hurts SSH/OTG testing.
+	busybox chroot "$ROOT" /usr/sbin/iw dev wlan0 set power_save off 2>/dev/null || true
+	busybox chroot "$ROOT" /usr/sbin/dhcpcd -4 -t 20 wlan0 || true
+
+	# init wrote the NCM resolver stub before WiFi existed.  Once wlan0 owns
+	# the default route, point the chroot at the WiFi DNS instead.
+	if busybox chroot "$ROOT" /usr/sbin/ip route 2>/dev/null | \
+		busybox grep -q '^default via .* dev wlan0'; then
+		printf 'nameserver %s\nnameserver %s\n' "${WIFI_DNS1:-192.168.1.1}" \
+			"${WIFI_DNS2:-223.5.5.5}" > "$ROOT/etc/resolv.conf"
+	fi
+
+	echo "[init] WiFi state:"
+	busybox chroot "$ROOT" /usr/sbin/iw dev wlan0 link || true
+	busybox chroot "$ROOT" /usr/sbin/ip -4 addr show wlan0 || true
+}
+wifi_up
+
+# ---- NTP: sync the clock after the network is up ----------------------------
+# The RTC is not battery-backed on this board and reads 1970 after every cold
+# boot, which makes apt reject repository signatures as "not live yet".  The
+# initramfs busybox already carries an NTP client; use static server IPs so
+# this does not depend on /etc/resolv.conf being populated by dhcpcd.
+ntp_sync() {
+	LOG="$ROOT/var/log/x2-ntp-sync.log"
+	busybox mkdir -p "$ROOT/var/log" 2>/dev/null
+	(
+		while :; do
+			if busybox ip route 2>/dev/null | busybox grep -q '^default '; then
+				busybox timeout 25 busybox ntpd -q \
+					-p 203.107.6.88 -p 162.159.200.1 \
+					>> "$LOG" 2>&1
+				if [ "$(busybox date +%Y 2>/dev/null || echo 1970)" -ge 2020 ] 2>/dev/null; then
+					echo "[init] NTP synced $(busybox date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$LOG"
+					break
+				fi
+			fi
+			busybox sleep 30
+		done
+	) &
+	echo "[init] NTP sync worker started (log: $LOG)"
+}
+ntp_sync
+
+# ---- Bluetooth: QCA6174 -----------------------------------------------------
+# QCA6174 is a serdev device on blsp1_uart2.  The mainline kernel exposes it as
+# /sys/bus/serial/devices/serial0-0; hci_uart then creates hci0.  BlueZ needs
+# a system bus plus bluetoothd, otherwise bluetoothctl aborts with a D-Bus
+# assertion before it can even reach the controller.
+bluetooth_up() {
+	[ -x "$ROOT/usr/sbin/modprobe" ] || {
+		echo "[init] modprobe missing; Bluetooth disabled this boot"
+		return 0
+	}
+
+	busybox chroot "$ROOT" /usr/sbin/modprobe bluetooth 2>/dev/null || true
+	busybox chroot "$ROOT" /usr/sbin/modprobe btqca 2>/dev/null || true
+	busybox chroot "$ROOT" /usr/sbin/modprobe hci_uart 2>/dev/null || true
+
+	i=0
+	while [ ! -d /sys/class/bluetooth/hci0 ] && [ $i -lt 10 ]; do
+		busybox sleep 1
+		i=$((i+1))
+	done
+	if [ ! -d /sys/class/bluetooth/hci0 ]; then
+		echo "[init] hci0 did not appear; Bluetooth disabled this boot"
+		busybox dmesg | busybox grep -iE 'bluetooth|hci|qca|serdev' | busybox tail -n 20
+		return 0
+	fi
+
+	busybox mkdir -p "$ROOT/run/dbus" "$ROOT/var/log"
+	busybox rm -f "$ROOT/run/dbus/pid" "$ROOT/run/dbus/system_bus_socket"
+	if [ -x "$ROOT/bin/dbus-daemon" ]; then
+		busybox chroot "$ROOT" /bin/dbus-daemon --system --fork 2>/dev/null || true
+		busybox sleep 1
+	fi
+	if [ -x "$ROOT/usr/libexec/bluetooth/bluetoothd" ]; then
+		busybox chroot "$ROOT" /usr/libexec/bluetooth/bluetoothd -d \
+			>> "$ROOT/var/log/bluetoothd.log" 2>&1 &
+		busybox sleep 2
+	fi
+
+	busybox chroot "$ROOT" /sbin/rfkill unblock bluetooth 2>/dev/null || true
+	busybox chroot "$ROOT" /bin/hciconfig hci0 up 2>/dev/null || true
+	busybox sleep 1
+	echo "[init] Bluetooth state:"
+	busybox chroot "$ROOT" /bin/hciconfig hci0 2>/dev/null || true
+}
+bluetooth_up
+
+# Keep the root password in /etc/shadow.  initramfs must not reset it on every
+# boot, otherwise password-auth SSH would silently stop working.
+
+# Keep the root password in /etc/shadow.  initramfs must not reset it on every
+# boot, otherwise password-auth SSH would silently stop working.
+
+echo "[init] root source: $SRC ($ROOT)"
+echo "=== entering Debian 13 userspace (systemd PID1) ==="
+
+# systemd needs a cgroup hierarchy and a writable /run.  /run is already a
+# directory in the rootfs; systemd will manage its own runtime state below it.
+# Mount cgroup2 if the kernel has not exposed it yet.  It is harmless if it is
+# already mounted by the boot path.
+busybox mkdir -p "$ROOT/sys/fs/cgroup" "$ROOT/run/systemd" "$ROOT/run/user" 2>/dev/null
+busybox mount -t cgroup2 none "$ROOT/sys/fs/cgroup" 2>/dev/null || true
+
+# systemd refuses to start when its root is not a mount point: it cannot set
+# up shared mount propagation for the API filesystems ("Invalid argument").
+# The Debian rootfs is a plain directory on the userdata ext4, so bind-mount
+# it onto itself and make it a slave of the initramfs root before exec.
+busybox mount --bind "$ROOT" "$ROOT" 2>/dev/null || true
+busybox mount --make-rslave "$ROOT" 2>/dev/null || true
+
+# Give systemd a proper tmpfs /run; the previous manual dbus/sshd sockets are
+# gone after this point and systemd owns the runtime directory.
+busybox mount -t tmpfs -o mode=755,size=256M tmpfs "$ROOT/run" 2>/dev/null || true
+busybox mkdir -p "$ROOT/run/systemd" "$ROOT/run/user" "$ROOT/run/dbus" "$ROOT/run/sshd" 2>/dev/null
+
+# Final firmware-path handoff. The kernel's firmware loader may resolve
+# firmware_class.path against the pre-chroot initramfs root even while systemd
+# runs in the chroot. Bind the real rootfs firmware directory over the
+# initramfs's /lib/firmware, then use "/lib/firmware" as the one path that is
+# valid both in the initramfs and inside the chroot. WiFi/BT/GPU have already
+# probed by this point; this is for later udev autoloads (ADSP, touch, audio).
+busybox mkdir -p /lib/firmware "$ROOT/lib/firmware"
+if busybox mount --bind "$ROOT/lib/firmware" /lib/firmware 2>/dev/null; then
+	if [ -w /sys/module/firmware_class/parameters/path ]; then
+		printf '%s' '/lib/firmware' > /sys/module/firmware_class/parameters/path
+	fi
+	echo "[init] firmware path handed to chroot: /lib/firmware"
+else
+	echo "[init] WARNING: could not bind rootfs /lib/firmware"
+fi
+
+# sshd must start after /run has been replaced by systemd's tmpfs.  Starting it
+# before that wipes /run/sshd and leaves sshd accepting connections but unable
+# to emit its banner.
+if [ -x "$ROOT/usr/sbin/sshd" ]; then
+	busybox mkdir -p "$ROOT/run/sshd" "$ROOT/var/empty" "$ROOT/root/.ssh"
+	if [ ! -f "$ROOT/etc/ssh/ssh_host_ed25519_key" ]; then
+		busybox chroot "$ROOT" /usr/bin/ssh-keygen -A >/dev/null 2>&1
+		echo "[init] generated ssh host keys"
+	fi
+	busybox chroot "$ROOT" /usr/sbin/sshd -p 22 >/dev/null 2>&1
+	busybox sleep 1
+	if busybox netstat -lnt 2>/dev/null | busybox grep -q ':22'; then
+		echo "[init] sshd listening on port 22"
+	else
+		echo "[init] WARNING: sshd did not start; use the serial console"
+	fi
+fi
+
+# Hand PID1 to systemd inside the chroot.  The initramfs has already brought
+# up USB, WiFi, Bluetooth and sshd, so a systemd failure still leaves a usable
+# network path for diagnosis (and panic=15 returns to Android on a hard crash).
+echo "[init] exec /sbin/init (systemd)"
+exec busybox chroot "$ROOT" /sbin/init

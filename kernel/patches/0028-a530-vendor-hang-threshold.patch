@@ -1,0 +1,20 @@
+diff --git a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+@@ -753,9 +753,13 @@
+ 			0xFFFFFFFF);
+ 	}
+ 
+-	/* Enable fault detection */
+-	gpu_write(gpu, REG_A5XX_RBBM_INTERFACE_HANG_INT_CNTL,
+-		(1 << 30) | 0xFFFF);
++	/* A530: use the vendor 4-million-cycle hang detector threshold. */
++	if (adreno_is_a530(adreno_gpu))
++		gpu_write(gpu, REG_A5XX_RBBM_INTERFACE_HANG_INT_CNTL,
++			(1 << 30) | 0x3FFFF);
++	else
++		gpu_write(gpu, REG_A5XX_RBBM_INTERFACE_HANG_INT_CNTL,
++			(1 << 30) | 0xFFFF);
+ 
+ 	/* Turn on performance counters */
+ 	gpu_write(gpu, REG_A5XX_RBBM_PERFCTR_CNTL, 0x01);
