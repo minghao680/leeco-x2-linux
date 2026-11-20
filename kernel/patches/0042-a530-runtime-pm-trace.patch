@@ -1,0 +1,84 @@
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+@@ -708,6 +708,9 @@
+ 	int ret;
+ 	int zap_ret;
+ 
++	dev_info(gpu->dev->dev, "A530 hw_init enter gpmu_ready=%d\n",
++		a5xx_gpu->gpmu_ready);
++
+ 	/*
+ 	 * The GPU may still be powered and running from the bootloader, or
+ 	 * GX may follow the SMMU power domain. Reset RBBM here rather than
+@@ -1009,6 +1012,9 @@
+ 	if (ret)
+ 		return ret;
+ 
++	dev_info(gpu->dev->dev, "A530 hw_init power done gpmu_ready=%d\n",
++		a5xx_gpu->gpmu_ready);
++
+ 	/*
+ 	 * Send a pipeline event stat to get misbehaving counters to start
+ 	 * ticking correctly
+@@ -1042,6 +1048,9 @@
+ 			a5xx_gpu->runtime_pm_forbidden = false;
+ 		}
+ 	}
++
++	dev_info(gpu->dev->dev, "A530 hw_init done gpmu_ready=%d\n",
++		a5xx_gpu->gpmu_ready);
+ 
+ 	return 0;
+ }
+@@ -1398,6 +1407,9 @@
+ 	struct a5xx_gpu *a5xx_gpu = to_a5xx_gpu(adreno_gpu);
+ 	int ret;
+ 
++	dev_info(gpu->dev->dev, "A530 pm_resume enter gpmu_ready=%d\n",
++		a5xx_gpu->gpmu_ready);
++
+ 	/* Turn on the core power */
+ 	ret = msm_gpu_pm_resume(gpu);
+ 	if (ret)
+@@ -1420,8 +1432,11 @@
+ 	 * bring-up. Keep the core rail/clock on and let hw_init start the
+ 	 * GPMU first.
+ 	 */
+-	if (!a5xx_gpu->gpmu_ready)
++	if (!a5xx_gpu->gpmu_ready) {
++		dev_info(gpu->dev->dev,
++			"A530 pm_resume deferred to hw_init (GPMU lost)\n");
+ 		return 0;
++	}
+ 
+ 	/* Turn the RBCCU domain first to limit the chances of voltage droop */
+ 	gpu_write(gpu, REG_A5XX_GPMU_RBCCU_POWER_CNTL, 0x778000);
+@@ -1445,6 +1460,9 @@
+ 	if (ret)
+ 		DRM_ERROR("%s: timeout waiting for SP GDSC enable\n",
+ 			gpu->name);
++	else
++		dev_info(gpu->dev->dev, "A530 pm_resume done gpmu_ready=%d\n",
++			a5xx_gpu->gpmu_ready);
+ 
+ 	return ret;
+ }
+@@ -1466,6 +1484,9 @@
+ 		return -EBUSY;
+ 	}
+ 
++	dev_info(gpu->dev->dev, "A530 pm_suspend enter gpmu_ready=%d\n",
++		a5xx_gpu->gpmu_ready);
++
+ 	/* A505, A506, A508, A510 have 3 XIN ports in VBIF */
+ 	if (adreno_is_a505(adreno_gpu) || adreno_is_a506(adreno_gpu) ||
+ 	    adreno_is_a508(adreno_gpu) || adreno_is_a510(adreno_gpu))
+@@ -1490,6 +1511,8 @@
+ 	ret = msm_gpu_pm_suspend(gpu);
+ 	if (ret)
+ 		return ret;
++
++	dev_info(gpu->dev->dev, "A530 pm_suspend core suspended\n");
+ 
+ 	/*
+ 	 * The core rail is off now, so GPMU state is gone.  pm_resume must not

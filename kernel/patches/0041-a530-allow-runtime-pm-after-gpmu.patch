@@ -1,0 +1,55 @@
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+@@ -1026,12 +1026,22 @@
+ 	a5xx_preempt_start(gpu);
+ 
+ 	/*
+-	 * The GPMU owns the RBCCU/SP GDSC handshake.  Until the firmware
+-	 * responds, runtime resume cannot safely run the GPMU/RBCCU path.
+-	 * Keep the core rail and clocks on and let devfreq scale the GPU.
+-	 */
+-	if (adreno_is_a530(adreno_gpu) && !a5xx_gpu->gpmu_ready)
+-		pm_runtime_forbid(&gpu->pdev->dev);
++	 * The GPMU owns the RBCCU/SP GDSC handshake.  Keep runtime PM blocked
++	 * until the firmware has answered 0xBABEFACE, then let the core
++	 * suspend/resume normally.  A530 needs a second GPMU attempt on this
++	 * board, so the first hw_init may legitimately fail here.
++	 */
++	if (adreno_is_a530(adreno_gpu)) {
++		if (!a5xx_gpu->gpmu_ready) {
++			if (!a5xx_gpu->runtime_pm_forbidden) {
++				pm_runtime_forbid(&gpu->pdev->dev);
++				a5xx_gpu->runtime_pm_forbidden = true;
++			}
++		} else if (a5xx_gpu->runtime_pm_forbidden) {
++			pm_runtime_allow(&gpu->pdev->dev);
++			a5xx_gpu->runtime_pm_forbidden = false;
++		}
++	}
+ 
+ 	return 0;
+ }
+@@ -1481,6 +1491,13 @@
+ 	if (ret)
+ 		return ret;
+ 
++	/*
++	 * The core rail is off now, so GPMU state is gone.  pm_resume must not
++	 * program RBCCU/SP before hw_init has reloaded the firmware.
++	 */
++	if (adreno_is_a530(adreno_gpu))
++		a5xx_gpu->gpmu_ready = false;
++
+ 	if (a5xx_gpu->has_whereami)
+ 		for (i = 0; i < gpu->nr_rings; i++)
+ 			a5xx_gpu->shadow[i] = 0;
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.h
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.h
+@@ -25,6 +25,7 @@
+ 	uint64_t gpmu_iova;
+ 	uint32_t gpmu_dwords;
+ 	bool gpmu_ready;
++	bool runtime_pm_forbidden;
+ 
+ 	uint32_t lm_leakage;
+ 

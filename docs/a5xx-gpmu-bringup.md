@@ -134,3 +134,24 @@ fastboot boot out/boot-x2-debian-systemd21-unsecure.img
 Do **not** `fastboot flash boot`: the temporary boot keeps the Android boot
 partition untouched.
 
+## 0041/0042 runtime suspend/resume result
+
+`0041-a530-allow-runtime-pm-after-gpmu.patch` lets A530 use runtime PM only
+after the GPMU answers `0xBABEFACE`. The first `hw_init` on this board can
+still time out, so `pm_runtime_forbid` remains active until a later
+`hw_init` succeeds. On success, `pm_runtime_allow` is called and
+`a5xx_pm_suspend()` clears `gpmu_ready` after the core is off; the next
+`pm_resume` therefore returns early and `hw_init` reloads the GPMU.
+
+`0042-a530-runtime-pm-trace.patch` adds stage logs for suspend/resume and
+`hw_init`.
+
+Hardware result (trace image, KDE loaded, no `x2-gpu-keepalive`):
+
+- GPMU ready at about 25.9 s after a first timeout.
+- Runtime suspend at 63.45 s: `pm_suspend core suspended`.
+- Runtime resume at 122.0 s: `pm_resume deferred to hw_init (GPMU lost)`,
+  then `hw_init power done gpmu_ready=1`, `hw_init done gpmu_ready=1`.
+- Multiple suspend/resume cycles completed without SSH loss or reboot.
+- `/sys/bus/platform/devices/b00000.gpu/power/control` is `auto`.
+
