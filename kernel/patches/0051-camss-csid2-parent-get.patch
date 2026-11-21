@@ -1,0 +1,20 @@
+diff --git a/drivers/media/platform/qcom/camss/camss.c b/drivers/media/platform/qcom/camss/camss.c
+index 1c9bb62b9..ae0dc4050 100644
+--- a/drivers/media/platform/qcom/camss/camss.c
++++ b/drivers/media/platform/qcom/camss/camss.c
+@@ -3956,8 +3956,14 @@ int camss_get_pixel_clock(struct media_entity *entity, u64 *pixel_clock)
+ 
+ static int vfe_parent_dev_ops_get(struct camss *camss, int id)
+ {
+-	int ret = -EINVAL;
++	int ret = 0;
+ 
++	/*
++	 * On MSM8996 there are four CSIDs but only two VFEs. CSID2 and
++	 * CSID3 have no 1:1 VFE mapping and their register blocks are
++	 * powered by the CAMSS top domain, so there is no parent VFE to
++	 * power up for them. Keep the parent reference for CSID0/CSID1.
++	 */
+ 	if (id < camss->res->vfe_num) {
+ 		struct vfe_device *vfe = &camss->vfe[id];
+ 

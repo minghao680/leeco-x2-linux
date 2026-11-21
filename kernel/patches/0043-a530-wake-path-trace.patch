@@ -1,0 +1,62 @@
+--- a/drivers/gpu/drm/msm/adreno/adreno_device.c
++++ b/drivers/gpu/drm/msm/adreno/adreno_device.c
+@@ -307,12 +307,15 @@
+ {
+ 	struct msm_gpu *gpu = dev_to_gpu(dev);
+ 
++	dev_info(dev, "adreno runtime_resume enter\n");
+ 	return gpu->funcs->pm_resume(gpu);
+ }
+ 
+ static int adreno_runtime_suspend(struct device *dev)
+ {
+ 	struct msm_gpu *gpu = dev_to_gpu(dev);
++
++	dev_info(dev, "adreno runtime_suspend enter\n");
+ 
+ 	/*
+ 	 * We should be holding a runpm ref, which will prevent
+--- a/drivers/gpu/drm/msm/msm_gpu.c
++++ b/drivers/gpu/drm/msm/msm_gpu.c
+@@ -100,22 +100,31 @@
+ {
+ 	int ret;
+ 
++	dev_info(gpu->dev->dev, "msm_gpu_pm_resume enter\n");
++
+ 	DBG("%s", gpu->name);
+ 	trace_msm_gpu_resume(0);
+ 
++	dev_info(gpu->dev->dev, "msm_gpu_pm_resume pwrrail enter\n");
+ 	ret = enable_pwrrail(gpu);
++	dev_info(gpu->dev->dev, "msm_gpu_pm_resume pwrrail done ret=%d\n", ret);
+ 	if (ret)
+ 		return ret;
+ 
++	dev_info(gpu->dev->dev, "msm_gpu_pm_resume clk enter\n");
+ 	ret = enable_clk(gpu);
++	dev_info(gpu->dev->dev, "msm_gpu_pm_resume clk done ret=%d\n", ret);
+ 	if (ret)
+ 		return ret;
+ 
++	dev_info(gpu->dev->dev, "msm_gpu_pm_resume axi enter\n");
+ 	ret = enable_axi(gpu);
++	dev_info(gpu->dev->dev, "msm_gpu_pm_resume axi done ret=%d\n", ret);
+ 	if (ret)
+ 		return ret;
+ 
+ 	msm_devfreq_resume(gpu);
++	dev_info(gpu->dev->dev, "msm_gpu_pm_resume done\n");
+ 
+ 	gpu->needs_hw_init = true;
+ 
+@@ -884,7 +893,9 @@
+ 
+ 	WARN_ON(!mutex_is_locked(&gpu->lock));
+ 
++	dev_info(gpu->dev->dev, "msm_gpu_submit rpm_get enter\n");
+ 	pm_runtime_get_sync(&gpu->pdev->dev);
++	dev_info(gpu->dev->dev, "msm_gpu_submit rpm_get done\n");
+ 
+ 	msm_gpu_hw_init(gpu);
+ 

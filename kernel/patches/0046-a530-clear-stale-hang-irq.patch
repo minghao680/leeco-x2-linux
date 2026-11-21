@@ -1,0 +1,49 @@
+--- a/drivers/gpu/drm/msm/adreno/a5xx_power.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_power.c
+@@ -375,7 +375,7 @@
+ 	 * then never completes the first STAT_EVENT and hits the 1s idle
+ 	 * timeout on every resume.
+ 	 */
+-	if (adreno_is_a530(adreno_gpu)) {
++	if (adreno_is_a530(adreno_gpu) && gpu->suspend_count) {
+ 		dev_info(gpu->dev->dev, "A530 GPMU soft reset before reload\n");
+ 		gpu_write(gpu, REG_A5XX_RBBM_BLOCK_SW_RESET_CMD, BIT(16));
+ 		udelay(10);
+@@ -425,12 +425,33 @@
+ 				return ret;
+ 		}
+ 
+-		if (gpu_read(gpu, REG_A5XX_RBBM_STATUS) &
+-		    ~A5XX_RBBM_STATUS_HI_BUSY) {
+-			DRM_ERROR("%s: GPMU reload still busy after retries (%08x)\n",
+-				gpu->name, gpu_read(gpu, REG_A5XX_RBBM_STATUS));
++		if (!a5xx_gpu->gpmu_ready ||
++		    (gpu_read(gpu, REG_A5XX_RBBM_STATUS) &
++		     ~A5XX_RBBM_STATUS_HI_BUSY)) {
++			DRM_ERROR("%s: GPMU reload still not ready after retries (ready=%d status=%08x)\n",
++				gpu->name, a5xx_gpu->gpmu_ready,
++				gpu_read(gpu, REG_A5XX_RBBM_STATUS));
+ 			return -EAGAIN;
+ 		}
++
++		/*
++		 * A failed GPMU kick leaves MISC_HANG_DETECT latched even
++		 * though RBBM_STATUS reports idle again.  a5xx_idle() treats
++		 * that as "not idle", waits a full second and fails hw_init.
++		 * Clear the stale GPMU/hang interrupt before the STAT_EVENT
++		 * probe so a successful retry does not look like a hang.
++		 */
++		{
++			u32 irq = gpu_read(gpu, REG_A5XX_RBBM_INT_0_STATUS);
++			u32 clear = BIT(23) | BIT(29);
++
++			if (irq & clear) {
++				DRM_ERROR("%s: clearing stale GPU irq %08x\n",
++					gpu->name, irq & clear);
++				gpu_write(gpu, REG_A5XX_RBBM_INT_CLEAR_CMD,
++					  irq & clear);
++			}
++		}
+ 	}
+ 
+ 	/* Start the limits management */

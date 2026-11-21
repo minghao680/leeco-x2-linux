@@ -1,0 +1,62 @@
+Subject: [PATCH] a530: disable hardware gating, use logical runtime PM
+
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+@@ -1411,20 +1411,16 @@
+ 		a5xx_gpu->gpmu_ready);
+ 
+ 	/*
+-	 * Keep the A530 core powered and let only the clocks/AXI gate while
+-	 * idle.  The full GPU_GX collapse on this board wedges the SoC before
+-	 * the next resume can run, and GPMU does not survive the collapse.
+-	 * A clocks-only cycle is a real runtime suspend, but leaves the rail,
+-	 * GPMU and RBCCU state intact.
++	 * Logical runtime PM for A530: let the runtime core enter suspended and
++	 * stop devfreq polling, but do not touch the GPU clock, AXI, power rail,
++	 * RBCCU, GPMU or CP.  Both full GPU_GX collapse and clock/AXI gating
++	 * wedge the A530 on this board; keeping the hardware untouched is the
++	 * only variant that survives KDE.
+ 	 */
+ 	if (adreno_is_a530(adreno_gpu) && a5xx_gpu->gpmu_ready) {
+-		ret = msm_gpu_pm_resume_clocks_only(gpu);
+-		if (ret)
+-			return ret;
+-
+-		gpu_write(gpu, REG_A5XX_RBBM_INT_0_MASK, A5XX_INT_MASK);
++		msm_devfreq_resume(gpu);
+ 		dev_info(gpu->dev->dev,
+-			"A530 pm_resume clocks-only done gpmu_ready=%d\n",
++			"A530 pm_resume logical done gpmu_ready=%d\n",
+ 			a5xx_gpu->gpmu_ready);
+ 		return 0;
+ 	}
+@@ -1507,23 +1503,16 @@
+ 		a5xx_gpu->gpmu_ready);
+ 
+ 	/*
+-	 * Clock/AXI-only suspend for A530.  Do not touch VBIF, SP/RBCCU,
+-	 * GPU_GX or GPMU here: the full collapse has repeatedly hard-reset the
+-	 * SoC right after "core suspended" on this board.  Mask RBBM interrupts
+-	 * while the GPU clock is off so a late GPMU IRQ cannot read registers
+-	 * with the bus gated.
++	 * Logical runtime suspend: only stop devfreq polling.  The GPU stays
++	 * fully powered and clocked so GPMU/CP state is preserved.  This is a
++	 * runtime-PM state transition, not a hardware power gate.
+ 	 */
+ 	if (adreno_is_a530(adreno_gpu)) {
+-		gpu_write(gpu, REG_A5XX_RBBM_INT_0_MASK, 0);
+-
+-		ret = msm_gpu_pm_suspend_clocks_only(gpu);
+-		if (ret) {
+-			gpu_write(gpu, REG_A5XX_RBBM_INT_0_MASK, A5XX_INT_MASK);
+-			return ret;
+-		}
++		msm_devfreq_suspend(gpu);
++		gpu->suspend_count++;
+ 
+ 		dev_info(gpu->dev->dev,
+-			"A530 pm_suspend clocks-only done gpmu_ready=%d\n",
++			"A530 pm_suspend logical done gpmu_ready=%d\n",
+ 			a5xx_gpu->gpmu_ready);
+ 		return 0;
+ 	}

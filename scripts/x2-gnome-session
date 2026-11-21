@@ -1,0 +1,18 @@
+#!/bin/sh
+# x2 GNOME Wayland session, started by x2-gnome.service on tty1.
+# The service uses PAMName=login, so pam_systemd has already created a
+# logind session with seat0; Mutter must see that same session.
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=GNOME
+export XDG_SESSION_DESKTOP=gnome
+export XDG_SEAT=seat0
+export XDG_VTNR=1
+export GNOME_SHELL_SESSION_MODE=gnome
+export G_MESSAGES_DEBUG=all
+
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+
+exec dbus-run-session -- gnome-shell --wayland --display-server --no-x11

@@ -25,6 +25,7 @@
 #include "pm8994.dtsi"
 #include "pmi8994.dtsi"
 #include "pmi8996.dtsi"
+#include <dt-bindings/clock/qcom,mmcc-msm8996.h>
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/input/ti-drv260x.h>
@@ -57,13 +58,28 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 		pinctrl-names = "default";
-		pinctrl-0 = <&vol_up_pin_a>;
+		pinctrl-0 = <&vol_up_pin_a &hall_default>;
 
 		key-vol-up {
 			label = "Volume Up";
 			linux,code = <KEY_VOLUMEUP>;
 			/* vendor mtp-le-common.dtsi:710 - vol_up is pm8994 gpio2 */
 			gpios = <&pm8994_gpios 2 GPIO_ACTIVE_LOW>;
+		};
+
+		/*
+		 * ROHM BU52061 hall switch on TLMM gpio124. The vendor Android
+		 * sensor reports it as a hall effect sensor; expose it as the
+		 * standard lid switch so evdev and systemd see it without a
+		 * custom input driver.
+		 */
+		hall-switch {
+			status = "disabled";
+			label = "Hall";
+			gpios = <&tlmm 124 GPIO_ACTIVE_LOW>;
+			linux,input-type = <EV_SW>;
+			linux,code = <SW_LID>;
+			wakeup-source;
 		};
 	};
 
@@ -171,6 +187,27 @@
 			regulator-name = "vreg_l24a_3p075";
 			regulator-min-microvolt = <3075000>;
 			regulator-max-microvolt = <3075000>;
+		};
+
+		/*
+		 * Camera rails are kept after all UFS/display rails so a slow or
+		 * failing RPM lookup here can never delay the regulators UFS
+		 * needs at probe time.
+		 */
+		vreg_s5a_2p15: s5 {
+			regulator-name = "vreg_s5a_2p15";
+			regulator-min-microvolt = <2150000>;
+			regulator-max-microvolt = <2150000>;
+		};
+
+		vreg_l29a_2p8: l29 {
+			regulator-name = "vreg_l29a_2p8";
+			regulator-min-microvolt = <2800000>;
+			regulator-max-microvolt = <2800000>;
+		};
+
+		vreg_lvs1a_1p8: lvs1 {
+			regulator-name = "vreg_lvs1a_1p8";
 		};
 	};
 };
@@ -678,6 +715,113 @@
 		drive-strength = <2>;
 		bias-disable;
 	};
+
+	/*
+	 * Front camera OV8865: MCLK2 on gpio15, RESET on gpio23,
+	 * STANDBY/PWDN on gpio26 (vendor msm8996-camera-sensor-le_x2.dtsi).
+	 */
+	leeco_cam_front_default: leeco-cam-front-default-state {
+		mclk2-pins {
+			pins = "gpio15";
+			function = "cam_mclk";
+			drive-strength = <16>;
+			bias-disable;
+		};
+
+		rst-pins {
+			pins = "gpio23";
+			function = "gpio";
+			drive-strength = <16>;
+			bias-disable;
+		};
+
+		pwdn-pins {
+			pins = "gpio26";
+			function = "gpio";
+			drive-strength = <16>;
+			bias-disable;
+		};
+	};
+
+	leeco_cam_front_sleep: leeco-cam-front-sleep-state {
+		pins = "gpio15", "gpio23", "gpio26";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+		output-low;
+	};
+
+	/* ROHM BU52061 hall switch on gpio124, open-drain output. */
+	hall_default: hall-default-state {
+		pins = "gpio124";
+		function = "gpio";
+		bias-pull-up;
+		input-enable;
+	};
+};
+
+/*
+ * Front camera: OV8865 on CCI master 1, CSIPHY2/CSID2, 4-lane MIPI.
+ * The vendor sensor node is qcom,camera@2 on i2c@a0c000 bus 1 (reg 0x10).
+ * CAMSS links CSIPHY -> CSID -> ISPIF -> VFE internally; the board only
+ * describes the sensor -> CSIPHY2 endpoint.
+ */
+&camss {
+	status = "okay";
+	vdda-supply = <&vreg_l2a_1p25>;
+
+	ports {
+		port@2 {
+			reg = <2>;
+
+			csiphy2_ep: endpoint {
+				clock-lanes = <7>;
+				data-lanes = <0 1 2 3>;
+				remote-endpoint = <&ov8865_ep>;
+			};
+		};
+	};
+};
+
+/*
+ * VFE SMMU is enabled next to the display SMMU block below, using the same
+ * bootloader-preserving setup.
+ */
+
+&cci {
+	status = "okay";
+};
+
+&cci_i2c1 {
+	status = "okay";
+
+	ov8865: camera@10 {
+		compatible = "ovti,ov8865";
+		reg = <0x10>;
+
+		reset-gpios = <&tlmm 23 GPIO_ACTIVE_LOW>;
+		powerdown-gpios = <&tlmm 26 GPIO_ACTIVE_LOW>;
+
+		pinctrl-names = "default", "sleep";
+		pinctrl-0 = <&leeco_cam_front_default>;
+		pinctrl-1 = <&leeco_cam_front_sleep>;
+
+		clocks = <&mmcc CAMSS_MCLK2_CLK>;
+		assigned-clocks = <&mmcc CAMSS_MCLK2_CLK>;
+		assigned-clock-rates = <24000000>;
+
+		avdd-supply = <&vreg_l29a_2p8>;
+		dovdd-supply = <&vreg_lvs1a_1p8>;
+		dvdd-supply = <&vreg_s5a_2p15>;
+
+		port {
+			ov8865_ep: endpoint {
+				link-frequencies = /bits/ 64 <360000000>;
+				data-lanes = <1 2 3 4>;
+				remote-endpoint = <&csiphy2_ep>;
+			};
+		};
+	};
 };
 
 &pm8994_gpios {
@@ -752,7 +896,11 @@
 	qcom,skip-init;
 	qcom,no-smr-check;
 };
-&vfe_smmu	{ status = "disabled"; };
+&vfe_smmu	{
+	status = "okay";
+	qcom,skip-init;
+	qcom,no-smr-check;
+};
 &venus_smmu	{ status = "disabled"; };
 &lpass_q6_smmu	{ status = "disabled"; };
 

@@ -164,10 +164,16 @@ static int leeco_x2_panel_unprepare(struct drm_panel *panel)
 #define LEECO_X2_FULL_HBP	(LEECO_X2_HBP * 2)
 #define LEECO_X2_FULL_HPW	(LEECO_X2_HPW * 2)
 
+/* DRM mode clock is the combined pixel clock in kHz. */
+#define LEECO_X2_FULL_PCLK(hz) \
+	((1440 + LEECO_X2_FULL_HFP + LEECO_X2_FULL_HBP + LEECO_X2_FULL_HPW) * \
+	 (2560 + LEECO_X2_VFP + LEECO_X2_VBP + LEECO_X2_VPW) * (hz) / 1000)
+#define LEECO_X2_HALF_PCLK(hz) \
+	((720 + LEECO_X2_HFP + LEECO_X2_HBP + LEECO_X2_HPW) * \
+	 (2560 + LEECO_X2_VFP + LEECO_X2_VBP + LEECO_X2_VPW) * (hz) / 1000)
+
 static const struct drm_display_mode leeco_x2_default_mode = {
-	.clock = (1440 + LEECO_X2_FULL_HFP + LEECO_X2_FULL_HBP +
-		  LEECO_X2_FULL_HPW) *
-		 (2560 + LEECO_X2_VFP + LEECO_X2_VBP + LEECO_X2_VPW) * 60 / 1000,
+	.clock = LEECO_X2_FULL_PCLK(60),
 	.hdisplay = 1440,
 	.hsync_start = 1440 + LEECO_X2_FULL_HFP,
 	.hsync_end = 1440 + LEECO_X2_FULL_HFP + LEECO_X2_FULL_HPW,
@@ -188,8 +194,7 @@ static const struct drm_display_mode leeco_x2_default_mode = {
  * supported configuration is the bonded 1440x2560 mode above.
  */
 static const struct drm_display_mode leeco_x2_half_mode = {
-	.clock = (720 + LEECO_X2_HFP + LEECO_X2_HBP + LEECO_X2_HPW) *
-		 (2560 + LEECO_X2_VFP + LEECO_X2_VBP + LEECO_X2_VPW) * 60 / 1000,
+	.clock = LEECO_X2_HALF_PCLK(60),
 	.hdisplay = 720,
 	.hsync_start = 720 + LEECO_X2_HFP,
 	.hsync_end = 720 + LEECO_X2_HFP + LEECO_X2_HPW,
@@ -203,17 +208,49 @@ static const struct drm_display_mode leeco_x2_half_mode = {
 	.type = DRM_MODE_TYPE_DRIVER,
 };
 
+static int leeco_x2_add_mode(struct drm_connector *connector,
+			     const struct drm_display_mode *src,
+			     unsigned int clock, bool preferred)
+{
+	struct drm_display_mode *mode;
+
+	mode = drm_mode_duplicate(connector->dev, src);
+	if (!mode)
+		return 0;
+
+	mode->clock = clock;
+	if (preferred)
+		mode->type |= DRM_MODE_TYPE_PREFERRED;
+	else
+		mode->type &= ~DRM_MODE_TYPE_PREFERRED;
+	drm_mode_set_name(mode);
+	drm_mode_probed_add(connector, mode);
+
+	if (mode->width_mm)
+		connector->display_info.width_mm = mode->width_mm;
+	if (mode->height_mm)
+		connector->display_info.height_mm = mode->height_mm;
+
+	return 1;
+}
+
 static int leeco_x2_panel_get_modes(struct drm_panel *panel,
 				    struct drm_connector *connector)
 {
+	int count = 0;
+
 	/* DSI-1 carries the 1440-wide combined mode fbcon uses; DSI-2 only
 	 * advertises the 720-wide right-half mode. */
 	if (strstr(connector->name, "-2"))
-		return drm_connector_helper_get_modes_fixed(connector,
-							    &leeco_x2_half_mode);
+		return leeco_x2_add_mode(connector, &leeco_x2_half_mode,
+					 LEECO_X2_HALF_PCLK(60), true);
 
-	return drm_connector_helper_get_modes_fixed(connector,
-						    &leeco_x2_default_mode);
+	/* Keep 60 Hz preferred; 65 Hz is the opt-in overclock profile. */
+	count += leeco_x2_add_mode(connector, &leeco_x2_default_mode,
+				   LEECO_X2_FULL_PCLK(60), true);
+	count += leeco_x2_add_mode(connector, &leeco_x2_default_mode,
+				   LEECO_X2_FULL_PCLK(65), false);
+	return count;
 }
 
 static const struct drm_panel_funcs leeco_x2_panel_funcs = {

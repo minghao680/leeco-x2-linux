@@ -1,0 +1,30 @@
+diff --git a/drivers/gpu/drm/msm/dsi/dsi_manager.c b/drivers/gpu/drm/msm/dsi/dsi_manager.c
+index c62fe325b..4f05ea426 100644
+--- a/drivers/gpu/drm/msm/dsi/dsi_manager.c
++++ b/drivers/gpu/drm/msm/dsi/dsi_manager.c
+@@ -386,6 +386,7 @@ static void dsi_mgr_bridge_mode_set(struct drm_bridge *bridge,
+ 		const struct drm_display_mode *mode,
+ 		const struct drm_display_mode *adjusted_mode)
+ {
++	struct dsi_bridge *dsi_bridge = to_dsi_bridge(bridge);
+ 	int id = dsi_mgr_bridge_get_id(bridge);
+ 	struct msm_dsi *msm_dsi = dsi_mgr_get_dsi(id);
+ 	struct msm_dsi *other_dsi = dsi_mgr_get_other_dsi(id);
+@@ -397,6 +398,17 @@ static void dsi_mgr_bridge_mode_set(struct drm_bridge *bridge,
+ 	if (is_bonded_dsi && !IS_MASTER_DSI_LINK(id))
+ 		return;
+ 
++	/*
++	 * The DSI runtime PM autosuspend delay is 200ms, longer than the
++	 * time between post_disable() and the next pre_enable() in an atomic
++	 * modeset.  Without forcing the host/PHY down here, the following
++	 * power_on() sees power_on/phy_enabled still set and keeps the old
++	 * byte/pixel clock; the new DRM mode is then only cosmetic.  Power
++	 * cycle explicitly so the new mode's rates are programmed.
++	 */
++	dsi_mgr_power_off(msm_dsi);
++	dsi_bridge->is_powered = false;
++
+ 	msm_dsi_host_set_display_mode(host, adjusted_mode);
+ 	if (is_bonded_dsi && other_dsi)
+ 		msm_dsi_host_set_display_mode(other_dsi->host, adjusted_mode);

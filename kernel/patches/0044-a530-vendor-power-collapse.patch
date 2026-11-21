@@ -1,0 +1,60 @@
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+@@ -1500,6 +1500,33 @@
+ 	gpu_write(gpu, REG_A5XX_VBIF_XIN_HALT_CTRL0, 0);
+ 
+ 	/*
++	 * The vendor sequence powers down the GPMU-owned SP and RBCCU
++	 * subdomains before collapsing GPU_GX.  Leaving them alive makes the
++	 * GDSC collapse draw a current spike and reset the PMIC on this board.
++	 * Keep the order identical to the vendor a5xx_regulator_disable().
++	 */
++	if (adreno_is_a530(adreno_gpu)) {
++		dev_info(gpu->dev->dev, "A530 pm_suspend collapse SP/RBCCU\n");
++
++		gpu_write(gpu, REG_A5XX_GPMU_SP_POWER_CNTL, 0x778001);
++		udelay(3);
++		ret = spin_usecs(gpu, 100, REG_A5XX_GPMU_SP_PWR_CLK_STATUS,
++				 (1 << 20), 0);
++		if (ret)
++			dev_warn(gpu->dev->dev,
++				 "A530 SP GDSC collapse timeout: %08x\n",
++				 gpu_read(gpu, REG_A5XX_GPMU_SP_PWR_CLK_STATUS));
++
++		gpu_write(gpu, REG_A5XX_GPMU_RBCCU_POWER_CNTL, 0x778001);
++		ret = spin_usecs(gpu, 100, REG_A5XX_GPMU_RBCCU_PWR_CLK_STATUS,
++				 (1 << 20), 0);
++		if (ret)
++			dev_warn(gpu->dev->dev,
++				 "A530 RBCCU GDSC collapse timeout: %08x\n",
++				 gpu_read(gpu, REG_A5XX_GPMU_RBCCU_PWR_CLK_STATUS));
++	}
++
++	/*
+ 	 * Reset the VBIF before power collapse to avoid issue with FIFO
+ 	 * entries on Adreno A510 and A530 (the others will tend to lock up)
+ 	 */
+--- a/drivers/gpu/drm/msm/adreno/a5xx_power.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_power.c
+@@ -368,6 +368,21 @@
+ 	if (ret)
+ 		return ret;
+ 
++	/*
++	 * After a runtime-power collapse the GPMU CM3 can retain stale state
++	 * even though GPU_GX is back on.  Vendor restarts the block before
++	 * reloading the firmware; without this the CP accepts the load but
++	 * then never completes the first STAT_EVENT and hits the 1s idle
++	 * timeout on every resume.
++	 */
++	if (adreno_is_a530(adreno_gpu)) {
++		dev_info(gpu->dev->dev, "A530 GPMU soft reset before reload\n");
++		gpu_write(gpu, REG_A5XX_RBBM_BLOCK_SW_RESET_CMD, BIT(16));
++		udelay(10);
++		gpu_write(gpu, REG_A5XX_RBBM_BLOCK_SW_RESET_CMD, 0);
++		udelay(100);
++	}
++
+ 	/* Start the GPMU */
+ 	ret = a5xx_gpmu_init(gpu);
+ 	DRM_ERROR("%s: gpmu_init ret=%d ready=%d GENERAL_0=%08x RBBM_STATUS=%08x\n",

@@ -1,0 +1,163 @@
+Subject: [PATCH] a530: clocks-only runtime suspend/resume and stop per-frame submit spam
+
+--- a/drivers/gpu/drm/msm/msm_gpu.h
++++ b/drivers/gpu/drm/msm/msm_gpu.h
+@@ -688,6 +688,8 @@
+ void msm_devfreq_idle(struct msm_gpu *gpu);
+ 
+ int msm_gpu_hw_init(struct msm_gpu *gpu);
++int msm_gpu_pm_resume_clocks_only(struct msm_gpu *gpu);
++int msm_gpu_pm_suspend_clocks_only(struct msm_gpu *gpu);
+ 
+ void msm_gpu_perfcntr_start(struct msm_gpu *gpu);
+ void msm_gpu_perfcntr_stop(struct msm_gpu *gpu);
+--- a/drivers/gpu/drm/msm/msm_gpu.c
++++ b/drivers/gpu/drm/msm/msm_gpu.c
+@@ -166,6 +166,58 @@
+ 	return 0;
+ }
+ 
++int msm_gpu_pm_resume_clocks_only(struct msm_gpu *gpu)
++{
++	int ret;
++
++	dev_info(gpu->dev->dev, "msm_gpu_pm_resume_clocks_only enter\n");
++
++	/*
++	 * Bring AXI back before the core clock so the GPMU never wakes up
++	 * without a valid bus path.
++	 */
++	ret = enable_axi(gpu);
++	if (ret)
++		return ret;
++
++	ret = enable_clk(gpu);
++	if (ret)
++		return ret;
++
++	msm_devfreq_resume(gpu);
++
++	dev_info(gpu->dev->dev, "msm_gpu_pm_resume_clocks_only done\n");
++
++	return 0;
++}
++
++int msm_gpu_pm_suspend_clocks_only(struct msm_gpu *gpu)
++{
++	int ret;
++
++	dev_info(gpu->dev->dev, "msm_gpu_pm_suspend_clocks_only enter\n");
++
++	msm_devfreq_suspend(gpu);
++
++	/*
++	 * Stop the core clock first so the GPMU is halted before AXI is
++	 * gated; disabling AXI under a running GPMU can wedge its AHB master.
++	 */
++	ret = disable_clk(gpu);
++	if (ret)
++		return ret;
++
++	ret = disable_axi(gpu);
++	if (ret)
++		return ret;
++
++	gpu->suspend_count++;
++
++	dev_info(gpu->dev->dev, "msm_gpu_pm_suspend_clocks_only done\n");
++
++	return 0;
++}
++
+ void msm_gpu_show_fdinfo(struct msm_gpu *gpu, struct msm_context *ctx,
+ 			 struct drm_printer *p)
+ {
+@@ -899,14 +951,27 @@
+ {
+ 	struct msm_ringbuffer *ring = submit->ring;
+ 	unsigned long flags;
++	int ret;
+ 
+ 	WARN_ON(!mutex_is_locked(&gpu->lock));
+ 
+-	dev_info(gpu->dev->dev, "msm_gpu_submit rpm_get enter\n");
+-	pm_runtime_get_sync(&gpu->pdev->dev);
+-	dev_info(gpu->dev->dev, "msm_gpu_submit rpm_get done\n");
++	ret = pm_runtime_get_sync(&gpu->pdev->dev);
++	if (ret < 0) {
++		dev_err(gpu->dev->dev,
++			"msm_gpu_submit: runtime resume failed: %d\n", ret);
++		return;
++	}
+ 
+-	msm_gpu_hw_init(gpu);
++	ret = msm_gpu_hw_init(gpu);
++	if (ret) {
++		dev_err(gpu->dev->dev,
++			"msm_gpu_submit: hw_init failed: %d, skipping frame\n",
++			ret);
++		dma_fence_set_error(submit->hw_fence, ret);
++		dma_fence_signal(submit->hw_fence);
++		pm_runtime_put(&gpu->pdev->dev);
++		return;
++	}
+ 
+ 	submit->seqno = submit->hw_fence->seqno;
+ 
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+@@ -1410,6 +1410,25 @@
+ 	dev_info(gpu->dev->dev, "A530 pm_resume enter gpmu_ready=%d\n",
+ 		a5xx_gpu->gpmu_ready);
+ 
++	/*
++	 * Keep the A530 core powered and let only the clocks/AXI gate while
++	 * idle.  The full GPU_GX collapse on this board wedges the SoC before
++	 * the next resume can run, and GPMU does not survive the collapse.
++	 * A clocks-only cycle is a real runtime suspend, but leaves the rail,
++	 * GPMU and RBCCU state intact.
++	 */
++	if (adreno_is_a530(adreno_gpu) && a5xx_gpu->gpmu_ready) {
++		ret = msm_gpu_pm_resume_clocks_only(gpu);
++		if (ret)
++			return ret;
++
++		gpu_write(gpu, REG_A5XX_RBBM_INT_0_MASK, A5XX_INT_MASK);
++		dev_info(gpu->dev->dev,
++			"A530 pm_resume clocks-only done gpmu_ready=%d\n",
++			a5xx_gpu->gpmu_ready);
++		return 0;
++	}
++
+ 	/* Turn on the core power */
+ 	ret = msm_gpu_pm_resume(gpu);
+ 	if (ret)
+@@ -1487,6 +1506,28 @@
+ 	dev_info(gpu->dev->dev, "A530 pm_suspend enter gpmu_ready=%d\n",
+ 		a5xx_gpu->gpmu_ready);
+ 
++	/*
++	 * Clock/AXI-only suspend for A530.  Do not touch VBIF, SP/RBCCU,
++	 * GPU_GX or GPMU here: the full collapse has repeatedly hard-reset the
++	 * SoC right after "core suspended" on this board.  Mask RBBM interrupts
++	 * while the GPU clock is off so a late GPMU IRQ cannot read registers
++	 * with the bus gated.
++	 */
++	if (adreno_is_a530(adreno_gpu)) {
++		gpu_write(gpu, REG_A5XX_RBBM_INT_0_MASK, 0);
++
++		ret = msm_gpu_pm_suspend_clocks_only(gpu);
++		if (ret) {
++			gpu_write(gpu, REG_A5XX_RBBM_INT_0_MASK, A5XX_INT_MASK);
++			return ret;
++		}
++
++		dev_info(gpu->dev->dev,
++			"A530 pm_suspend clocks-only done gpmu_ready=%d\n",
++			a5xx_gpu->gpmu_ready);
++		return 0;
++	}
++
+ 	/* A505, A506, A508, A510 have 3 XIN ports in VBIF */
+ 	if (adreno_is_a505(adreno_gpu) || adreno_is_a506(adreno_gpu) ||
+ 	    adreno_is_a508(adreno_gpu) || adreno_is_a510(adreno_gpu))

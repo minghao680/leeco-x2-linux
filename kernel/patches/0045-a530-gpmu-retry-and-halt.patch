@@ -1,0 +1,106 @@
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+@@ -1535,6 +1535,17 @@
+ 		gpu_write(gpu, REG_A5XX_RBBM_BLOCK_SW_RESET_CMD, 0x00000000);
+ 	}
+ 
++	/*
++	 * GPMU is still a live CM3 when the core clocks are cut.  Assert its
++	 * reset first; otherwise a late AHB transaction can wedge the bus and
++	 * take the SoC down before the next runtime_resume can log anything.
++	 */
++	if (adreno_is_a530(adreno_gpu) && a5xx_gpu->gpmu_ready) {
++		dev_info(gpu->dev->dev, "A530 halt GPMU before collapse\n");
++		gpu_write(gpu, REG_A5XX_GPMU_CM3_SYSRESET, 1);
++		udelay(50);
++	}
++
+ 	ret = msm_gpu_pm_suspend(gpu);
+ 	if (ret)
+ 		return ret;
+--- a/drivers/gpu/drm/msm/adreno/a5xx_power.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_power.c
+@@ -392,6 +392,47 @@
+ 	if (ret)
+ 		return ret;
+ 
++	/*
++	 * On this board the first reload after a GPU_GX collapse often
++	 * reports BABEFACE while RBBM is still busy.  The following
++	 * STAT_EVENT then waits the full 1s idle timeout and triggers a
++	 * hangcheck.  Vendor effectively gets a second clean start after the
++	 * recovery reset; do that here, before returning to the submit path.
++	 */
++	if (adreno_is_a530(adreno_gpu)) {
++		int attempt;
++
++		for (attempt = 0; attempt < 2; attempt++) {
++			if (!(gpu_read(gpu, REG_A5XX_RBBM_STATUS) &
++			      ~A5XX_RBBM_STATUS_HI_BUSY))
++				break;
++
++			DRM_ERROR("%s: GPMU reload left RBBM busy (%08x), retry %d\n",
++				gpu->name, gpu_read(gpu, REG_A5XX_RBBM_STATUS),
++				attempt + 1);
++
++			gpu_write(gpu, REG_A5XX_RBBM_BLOCK_SW_RESET_CMD, BIT(16));
++			udelay(10);
++			gpu_write(gpu, REG_A5XX_RBBM_BLOCK_SW_RESET_CMD, 0);
++			udelay(100);
++
++			ret = a5xx_gpmu_init(gpu);
++			DRM_ERROR("%s: gpmu retry ret=%d ready=%d GENERAL_0=%08x RBBM_STATUS=%08x\n",
++				gpu->name, ret, a5xx_gpu->gpmu_ready,
++				gpu_read(gpu, REG_A5XX_GPMU_GENERAL_0),
++				gpu_read(gpu, REG_A5XX_RBBM_STATUS));
++			if (ret)
++				return ret;
++		}
++
++		if (gpu_read(gpu, REG_A5XX_RBBM_STATUS) &
++		    ~A5XX_RBBM_STATUS_HI_BUSY) {
++			DRM_ERROR("%s: GPMU reload still busy after retries (%08x)\n",
++				gpu->name, gpu_read(gpu, REG_A5XX_RBBM_STATUS));
++			return -EAGAIN;
++		}
++	}
++
+ 	/* Start the limits management */
+ 	a5xx_lm_enable(gpu);
+ 
+--- a/drivers/gpu/drm/msm/msm_gpu.c
++++ b/drivers/gpu/drm/msm/msm_gpu.c
+@@ -135,24 +135,33 @@
+ {
+ 	int ret;
+ 
++	dev_info(gpu->dev->dev, "msm_gpu_pm_suspend enter\n");
++
+ 	DBG("%s", gpu->name);
+ 	trace_msm_gpu_suspend(0);
+ 
+ 	msm_devfreq_suspend(gpu);
+ 
++	dev_info(gpu->dev->dev, "msm_gpu_pm_suspend axi off enter\n");
+ 	ret = disable_axi(gpu);
++	dev_info(gpu->dev->dev, "msm_gpu_pm_suspend axi off done ret=%d\n", ret);
+ 	if (ret)
+ 		return ret;
+ 
++	dev_info(gpu->dev->dev, "msm_gpu_pm_suspend clk off enter\n");
+ 	ret = disable_clk(gpu);
++	dev_info(gpu->dev->dev, "msm_gpu_pm_suspend clk off done ret=%d\n", ret);
+ 	if (ret)
+ 		return ret;
+ 
++	dev_info(gpu->dev->dev, "msm_gpu_pm_suspend pwrrail off enter\n");
+ 	ret = disable_pwrrail(gpu);
++	dev_info(gpu->dev->dev, "msm_gpu_pm_suspend pwrrail off done ret=%d\n", ret);
+ 	if (ret)
+ 		return ret;
+ 
+ 	gpu->suspend_count++;
++	dev_info(gpu->dev->dev, "msm_gpu_pm_suspend done\n");
+ 
+ 	return 0;
+ }
